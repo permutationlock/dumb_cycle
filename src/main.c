@@ -22,7 +22,8 @@ enum syscall {
     SYS_MMAP = 9,
     SYS_MUNMAP = 11,
     SYS_IOCTL = 16,
-    SYS_EXIT = 60
+    SYS_EXIT = 60,
+    SYS_GETDENTS = 78
 };
 
 extern u64 syscall0(u64 scid);
@@ -37,7 +38,7 @@ enum error_code { EINTR = 4 };
 
 static e32 syscall_error(u64 rvalue);
 
-enum open { O_RDWR = 02, O_CLOEXEC = 02000000 };
+enum open { O_RDONLY = 00, O_WRONLY = 01, O_RDWR = 02, O_CLOEXEC = 02000000 };
 
 enum prot { PROT_READ = 1, PROT_WRITE = 2 };
 
@@ -45,11 +46,21 @@ enum map { MAP_SHARED = 0x01, MAP_PRIVATE = 0x02, MAP_ANON = 0x20 };
 
 typedef char *cstring;
 
+struct linux_dirent {
+    u64 ino;
+    u64 off;
+    u16 reclen;
+    char name[];
+};
+
 static i64 read(i32 fd, u8 *bytes, i64 bytes_len);
 static i64 write(i32 fd, u8 *bytes, i64 bytes_len);
 static i32 open(cstring fname, i32 flags, i32 mode);
 static e32 close(i32 fd);
 static e32 ioctl(i32 fd, i32 request, u8 *arg);
+static void exit(e32 error_code);
+static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_len);
+
 static void *mmap(
     void *hint,
     i64 size,
@@ -66,6 +77,30 @@ struct arena {
 };
 
 static void *alloc(struct arena *arena, i64 size, i64 align);
+
+enum ev_code { EV_KEY = 0x01, EV_MAX = 0x1f };
+enum ev_keys {
+    KEY_ESC = 1,
+    KEY_W = 17,
+    KEY_A = 30,
+    KEY_S = 31,
+    KEY_D = 32,
+    KEY_MAX = 0x2ff
+};
+
+enum kd_code { KDGKBMODE = 0x4B44, KDSKBMODE = 0x4B45 };
+enum kd_kb_code {
+    K_RAW = 0x00,
+    K_XLATE = 0x01,
+    K_MEDIUMRAW = 0x02,
+    K_UNICODE = 0x03,
+    K_OFF = 0x04
+};
+
+static e32 evio_cg_getbits(i32 fd, u8 event_code, i16 size, u8 *data);
+static b32 is_keyboard(i32 fd);
+static e32 disable_tty(void);
+static i32 open_keyboard(struct arena temp_arena);
 
 struct drm_mode_resources {
     u32 *fbs;
@@ -377,8 +412,18 @@ static e32 ioctl(i32 fd, i32 request, u8 *arg) {
     return error;
 }
 
-static void exit(i32 error_code) {
-    syscall1(SYS_EXIT, error_code);
+static void exit(e32 error_code) {
+    syscall1(SYS_EXIT, (u64)error_code);
+}
+
+static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_size_bytes) {
+    u64 return_value =
+        syscall3(SYS_GETDENTS, (u64)fd, (u64)dents, (u64)dents_size_bytes);
+    e32 error = syscall_error(return_value);
+    if (error != 0) {
+        return -error;
+    }
+    return return_value;
 }
 
 static void *alloc(struct arena *arena, i64 size, i64 align) {
@@ -390,6 +435,105 @@ static void *alloc(struct arena *arena, i64 size, i64 align) {
     u8 *p = arena->start + padding;
     arena->start += padding + size;
     return memset(p, 0, size);
+}
+
+static i32 test_bit(u8 *bytes, i32 len, i32 bit_num) {
+    i32 byte_index = bit_num / 8;
+    i32 bit_index = bit_num % 8;
+    if (byte_index >= len) {
+        return 0;
+    }
+
+    return (bytes[byte_index] & (1 << bit_index)) != 0;
+}
+
+static e32 evio_cg_getbits(i32 fd, u8 event_code, i16 size, u8 *data) {
+    return ioctl(
+        fd,
+        ((u32)event_code + 0x20) | ((u32)'E' << 8) | ((u32)size << 16) |
+            (2U << 30),
+        data
+    );
+}
+
+static i32 is_keyboard(i32 fd) {
+    u8 evbits[(EV_MAX + 1) / 8];
+    e32 error = evio_cg_getbits(fd, 0, sizeof(evbits), evbits);
+    if (error != 0) {
+        return 0;
+    }
+    if ((evbits[0] & EV_KEY) == 0) {
+        return 0;
+    }
+
+    u8 keybits[(KEY_MAX + 1) / 8];
+    error = evio_cg_getbits(fd, EV_KEY, sizeof(keybits), keybits);
+    if (error != 0) {
+        return 0;
+    }
+
+    if (!test_bit(keybits, sizeof(keybits), KEY_ESC)) {
+        return 0;
+    }
+    if (!test_bit(keybits, sizeof(keybits), KEY_W)) {
+        return 0;
+    }
+    if (!test_bit(keybits, sizeof(keybits), KEY_A)) {
+        return 0;
+    }
+    if (!test_bit(keybits, sizeof(keybits), KEY_S)) {
+        return 0;
+    }
+    if (!test_bit(keybits, sizeof(keybits), KEY_D)) {
+        return 0;
+    }
+
+    return 1;
+}
+
+static e32 disable_tty(void) {
+    return ioctl(0, KDSKBMODE, (u8 *)K_OFF);
+}
+
+static i32 open_keyboard(struct arena temp_arena) {
+    u8 input_dir[] = "/dev/input";
+    i32 input_dir_fd = open((cstring)input_dir, O_RDONLY | O_CLOEXEC, 0);
+    if (input_dir_fd < 0) {
+        return -1;
+    }
+
+    struct linux_dirent *dents = alloc(&temp_arena, 1024, 16);
+    u8 path_buffer[(sizeof(input_dir) - 1) + 1024];
+    memcpy(path_buffer, input_dir, sizeof(input_dir));
+    path_buffer[sizeof(input_dir) - 1] = '/';
+    u8 *name_buffer = &path_buffer[sizeof(input_dir)];
+
+    i64 dents_pos = 0;
+    i64 dents_len = 0;
+    i32 keyboard_fd = -1;
+    while (keyboard_fd < 0) {
+        if (dents_pos >= dents_len) {
+            dents_len = getdents(input_dir_fd, dents, 1024);
+            if (dents_len <= 0) {
+                break;
+            }
+        }
+        struct linux_dirent *dent = (void *)(((u8 *)dents) + dents_pos);
+        memcpy(name_buffer, dent->name, dent->reclen - 18);
+        path_buffer[sizeof(path_buffer) - 1] = 0;
+        keyboard_fd = open((cstring)path_buffer, O_RDONLY, 0);
+        if (keyboard_fd >= 0) {
+            if (!is_keyboard(keyboard_fd)) {
+                close(keyboard_fd);
+                keyboard_fd = -1;
+            }
+        }
+        dents_pos += dent->reclen;
+    }
+
+    close(input_dir_fd);
+
+    return keyboard_fd;
 }
 
 static struct drm_mode_resources *drm_mode_get_resources(
@@ -648,6 +792,7 @@ static e32 drm_mode_page_flip(
 }
 
 static i32 cmain(i32 argc, cstring *argv) {
+    e32 error;
     i64 arena_size = 2000 * 4096;
     u8 *mem = mmap(
         0, arena_size, PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANON, -1, 0
@@ -657,15 +802,29 @@ static i32 cmain(i32 argc, cstring *argv) {
     }
     struct arena perm_arena = { .start = mem, .end = mem + arena_size };
 
+    i32 keyboard_fd = open_keyboard(perm_arena);
+    if (keyboard_fd < 0) {
+        return 2;
+    }
+
+    error = ioctl(
+        keyboard_fd,
+        ((u32)0x90) | ((u32)'E' << 8) | (4 << 16) | (1U << 30),
+        (u8 *)1
+    );
+    if (error != 0) {
+        return 3;
+    }
+
     i32 card_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC, 0);
     if (card_fd < 0) {
-        return 2;
+        return 4;
     }
 
     struct drm_mode_resources *res =
         drm_mode_get_resources(&perm_arena, card_fd);
     if (res == 0) {
-        return 3;
+        return 5;
     }
 
     i32 conn_index;
@@ -682,26 +841,26 @@ static i32 cmain(i32 argc, cstring *argv) {
         }
     }
     if (conn_index == res->connectors_len || conn == 0) {
-        return 4;
+        return 6;
     }
 
     struct drm_mode_encoder *enc =
         drm_mode_get_encoder(&perm_arena, card_fd, conn->encoder_id);
     if (enc == 0) {
-        return 5;
+        return 7;
     }
 
     struct drm_mode_crtc *crtc =
         drm_mode_get_crtc(&perm_arena, card_fd, enc->crtc_id);
     if (crtc == 0) {
-        return 6;
+        return 8;
     }
 
     struct drm_mode_dumb_buffer *buf = drm_mode_create_dumb_buffer(
         &perm_arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
     );
     if (buf == 0) {
-        return 7;
+        return 9;
     }
 
     for (i32 i = 0; i < (i64)buf->size; i += 4) {
@@ -711,9 +870,9 @@ static i32 cmain(i32 argc, cstring *argv) {
         buf->map[i + 3] = 0xff;
     }
 
-    e32 error = drm_mode_set_crtc(card_fd, crtc, &conn->connector_id, 1);
+    error = drm_mode_set_crtc(card_fd, crtc, &conn->connector_id, 1);
     if (error != 0) {
-        return 8;
+        return 10;
     }
 
     u8 pflip_str[] = "page flipped\n";
@@ -721,17 +880,17 @@ static i32 cmain(i32 argc, cstring *argv) {
     while (1) {
         i64 len = write(2, pflip_str, sizeof(pflip_str));
         if (len != sizeof(pflip_str)) {
-            return 9;
+            return 11;
         }
         error = drm_mode_page_flip(
             card_fd, enc->crtc_id, buf->fb_id, DRM_MODE_PAGE_FLIP_EVENT, 0
         );
         if (error != 0) {
-            return 10;
+            return 12;
         }
         len = read(card_fd, (u8 *)events, sizeof(events));
         if (len < 0) {
-            return 11;
+            return 13;
         }
     }
 
