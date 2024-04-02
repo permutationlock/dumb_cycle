@@ -23,7 +23,10 @@ enum syscall {
     SYS_MUNMAP = 11,
     SYS_IOCTL = 16,
     SYS_EXIT = 60,
-    SYS_GETDENTS = 78
+    SYS_GETDENTS = 78,
+    SYS_EPOLL_WAIT = 232,
+    SYS_EPOLL_CTL = 233,
+    SYS_EPOLL_CREATE1 = 291
 };
 
 extern u64 syscall0(u64 scid);
@@ -34,17 +37,27 @@ extern u64 syscall4(u64 scid, u64 a1, u64 a2, u64 a3, u64 a4);
 extern u64 syscall5(u64 scid, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5);
 extern u64 syscall6(u64 scid, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6);
 
-enum error_code { EINTR = 4 };
-
 static e32 syscall_error(u64 rvalue);
 
+enum error_code { EINTR = 4 };
 enum open { O_RDONLY = 00, O_WRONLY = 01, O_RDWR = 02, O_CLOEXEC = 02000000 };
-
 enum prot { PROT_READ = 1, PROT_WRITE = 2 };
-
 enum map { MAP_SHARED = 0x01, MAP_PRIVATE = 0x02, MAP_ANON = 0x20 };
 
 typedef char *cstring;
+
+union epoll_data {
+    void *data;
+    i32 fd;
+};
+
+struct epoll_event {
+    u32 events;
+    union epoll_data data;
+};
+
+enum epoll_ctl { EPOLL_CTL_ADD = 1 };
+enum epoll_event_code { EPOLLIN = 0x001 };
 
 struct linux_dirent {
     u64 ino;
@@ -57,10 +70,6 @@ static i64 read(i32 fd, u8 *bytes, i64 bytes_len);
 static i64 write(i32 fd, u8 *bytes, i64 bytes_len);
 static i32 open(cstring fname, i32 flags, i32 mode);
 static e32 close(i32 fd);
-static e32 ioctl(i32 fd, i32 request, u8 *arg);
-static void exit(e32 error_code);
-static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_len);
-
 static void *mmap(
     void *hint,
     i64 size,
@@ -70,6 +79,17 @@ static void *mmap(
     i64 offset
 );
 static e32 munmap(void *start, i64 size);
+static e32 ioctl(i32 fd, i32 request, u8 *arg);
+static void exit(e32 error_code);
+static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_len);
+static i32 epoll_wait(
+    i32 epfd,
+    struct epoll_event *events,
+    i32 events_len,
+    i32 timeout_ms
+);
+static e32 epoll_ctl(i32 epfd, i32 op, i32 fd, struct epoll_event *event);
+static i32 epoll_create1(void);
 
 struct arena {
     u8 *start;
@@ -88,18 +108,20 @@ enum ev_keys {
     KEY_MAX = 0x2ff
 };
 
-enum kd_code { KDGKBMODE = 0x4B44, KDSKBMODE = 0x4B45 };
-enum kd_kb_code {
-    K_RAW = 0x00,
-    K_XLATE = 0x01,
-    K_MEDIUMRAW = 0x02,
-    K_UNICODE = 0x03,
-    K_OFF = 0x04
+struct timeval {
+    i64 sec;
+    i64 nsec;
+};
+
+struct input_event {
+    struct timeval time;
+    u16 type;
+    u16 code;
+    i32 value;
 };
 
 static e32 evio_cg_getbits(i32 fd, u8 event_code, i16 size, u8 *data);
 static b32 is_keyboard(i32 fd);
-static e32 disable_tty(void);
 static i32 open_keyboard(struct arena temp_arena);
 
 struct drm_mode_resources {
@@ -426,6 +448,38 @@ static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_size_bytes) {
     return return_value;
 }
 
+static i32 epoll_wait(
+    i32 epfd,
+    struct epoll_event *events,
+    i32 events_len,
+    i32 timeout_ms
+) {
+    u64 return_value = syscall4(
+        SYS_EPOLL_WAIT, (u64)epfd, (u64)events, (u64)events_len, (u64)timeout_ms
+    );
+    e32 error = syscall_error(return_value);
+    if (error != 0) {
+        return -error;
+    }
+    return (i32)return_value;
+}
+
+static e32 epoll_ctl(i32 epfd, i32 op, i32 fd, struct epoll_event *event) {
+    u64 return_value =
+        syscall4(SYS_EPOLL_CTL, (u64)epfd, (u64)op, (u64)fd, (u64)event);
+    e32 error = syscall_error(return_value);
+    return error;
+}
+
+static i32 epoll_create1(void) {
+    u64 return_value = syscall1(SYS_EPOLL_CREATE1, O_CLOEXEC);
+    e32 error = syscall_error(return_value);
+    if (error != 0) {
+        return -error;
+    }
+    return (i32)return_value;
+}
+
 static void *alloc(struct arena *arena, i64 size, i64 align) {
     i64 available = arena->end - arena->start;
     i64 padding = -(u64)arena->start & (align - 1);
@@ -491,10 +545,6 @@ static i32 is_keyboard(i32 fd) {
     return 1;
 }
 
-static e32 disable_tty(void) {
-    return ioctl(0, KDSKBMODE, (u8 *)K_OFF);
-}
-
 static i32 open_keyboard(struct arena temp_arena) {
     u8 input_dir[] = "/dev/input";
     i32 input_dir_fd = open((cstring)input_dir, O_RDONLY | O_CLOEXEC, 0);
@@ -503,7 +553,7 @@ static i32 open_keyboard(struct arena temp_arena) {
     }
 
     struct linux_dirent *dents = alloc(&temp_arena, 1024, 16);
-    u8 path_buffer[(sizeof(input_dir) - 1) + 1024];
+    u8 path_buffer[(sizeof(input_dir) - 1) + 1023];
     memcpy(path_buffer, input_dir, sizeof(input_dir));
     path_buffer[sizeof(input_dir) - 1] = '/';
     u8 *name_buffer = &path_buffer[sizeof(input_dir)];
@@ -513,7 +563,7 @@ static i32 open_keyboard(struct arena temp_arena) {
     i32 keyboard_fd = -1;
     while (keyboard_fd < 0) {
         if (dents_pos >= dents_len) {
-            dents_len = getdents(input_dir_fd, dents, 1024);
+            dents_len = getdents(input_dir_fd, dents, 1023);
             if (dents_len <= 0) {
                 break;
             }
@@ -875,22 +925,76 @@ static i32 cmain(i32 argc, cstring *argv) {
         return 10;
     }
 
-    u8 pflip_str[] = "page flipped\n";
-    struct drm_event_vblank events[100];
+    i32 epoll_fd = epoll_create1();
+    if (epoll_fd < 0) {
+        return 11;
+    }
+
+    struct epoll_event epoll_event = {
+        .events = EPOLLIN,
+        .data.fd = keyboard_fd,
+    };
+    error = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, keyboard_fd, &epoll_event);
+    if (error != 0) {
+        return 12;
+    }
+
+    epoll_event.data.fd = card_fd;
+    error = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, card_fd, &epoll_event);
+    if (error != 0) {
+        return 13;
+    }
+
+    error = drm_mode_page_flip(
+        card_fd, enc->crtc_id, buf->fb_id, DRM_MODE_PAGE_FLIP_EVENT, 0
+    );
+    if (error != 0) {
+        return 14;
+    }
+
+    struct epoll_event ep_events[8];
+    struct input_event kb_events[32];
+    struct drm_event_vblank drm_events[32];
     while (1) {
-        i64 len = write(2, pflip_str, sizeof(pflip_str));
-        if (len != sizeof(pflip_str)) {
-            return 11;
-        }
-        error = drm_mode_page_flip(
-            card_fd, enc->crtc_id, buf->fb_id, DRM_MODE_PAGE_FLIP_EVENT, 0
+        i32 ep_count = epoll_wait(
+            epoll_fd, ep_events, sizeof(ep_events) / sizeof(*ep_events), 0
         );
-        if (error != 0) {
-            return 12;
+        if (ep_count < 0) {
+            return 18;
         }
-        len = read(card_fd, (u8 *)events, sizeof(events));
-        if (len < 0) {
-            return 13;
+        for (i32 ep_index = 0; ep_index < ep_count; ++ep_index) {
+            if (ep_events[ep_index].data.fd == keyboard_fd) {
+                i64 len = read(keyboard_fd, (u8 *)kb_events, sizeof(kb_events));
+                if (len < 0) {
+                    return 17;
+                }
+                for (i32 i = 0; i < (i32)(len / sizeof(*kb_events)); ++i) {
+                    if (kb_events[i].type == 1 && kb_events[i].value == 1) {
+                        switch (kb_events[i].code) {
+                            case KEY_ESC:
+                                return 0;
+                            default:
+                                continue;
+                        }
+                    }
+                }
+            } else {
+                i64 len = read(card_fd, (u8 *)drm_events, sizeof(drm_events));
+                if (len < 0) {
+                    return 15;
+                }
+
+                error = drm_mode_page_flip(
+                    card_fd,
+                    enc->crtc_id,
+                    buf->fb_id,
+                    DRM_MODE_PAGE_FLIP_EVENT,
+                    0
+                );
+                if (error != 0) {
+                    return 16;
+                }
+            }
         }
     }
 
