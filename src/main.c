@@ -24,6 +24,7 @@ enum syscall {
     SYS_IOCTL = 16,
     SYS_EXIT = 60,
     SYS_GETDENTS = 78,
+    SYS_CLOCK_GETTIME = 228,
     SYS_EPOLL_WAIT = 232,
     SYS_EPOLL_CTL = 233,
     SYS_EPOLL_CREATE1 = 291
@@ -43,8 +44,14 @@ enum error_code { EINTR = 4 };
 enum open { O_RDONLY = 00, O_WRONLY = 01, O_RDWR = 02, O_CLOEXEC = 02000000 };
 enum prot { PROT_READ = 1, PROT_WRITE = 2 };
 enum map { MAP_SHARED = 0x01, MAP_PRIVATE = 0x02, MAP_ANON = 0x20 };
+enum clock { CLOCK_MONOTONIC = 1 };
 
 typedef char *cstring;
+
+struct timespec {
+    i64 sec;
+    i64 nsec;
+};
 
 union epoll_data {
     void *data;
@@ -82,6 +89,7 @@ static e32 munmap(void *start, i64 size);
 static e32 ioctl(i32 fd, i32 request, u8 *arg);
 static void exit(e32 error_code);
 static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_len);
+static e32 clock_gettime(i32 clock_id, struct timespec *timespec);
 static i32 epoll_wait(
     i32 epfd,
     struct epoll_event *events,
@@ -98,6 +106,8 @@ struct arena {
 
 static void *alloc(struct arena *arena, i64 size, i64 align);
 
+static i64 nsec_since(struct timespec *end, struct timespec *start);
+
 enum ev_code { EV_KEY = 0x01, EV_MAX = 0x1f };
 enum ev_keys {
     KEY_ESC = 1,
@@ -108,18 +118,14 @@ enum ev_keys {
     KEY_MAX = 0x2ff
 };
 
-struct timeval {
-    i64 sec;
-    i64 nsec;
-};
-
 struct input_event {
-    struct timeval time;
+    struct timespec time;
     u16 type;
     u16 code;
     i32 value;
 };
 
+static i32 test_bit(u8 *bytes, i32 len, i32 bit_num);
 static e32 evio_cg_getbits(i32 fd, u8 event_code, i16 size, u8 *data);
 static b32 is_keyboard(i32 fd);
 static i32 open_keyboard(struct arena temp_arena);
@@ -309,7 +315,8 @@ static e32 drm_mode_set_crtc(
     i32 fd,
     struct drm_mode_crtc *crtc,
     u32 *connectors,
-    i32 connectors_len
+    i32 connectors_len,
+    u32 fb_id
 );
 static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     struct arena *perm_arena,
@@ -420,8 +427,7 @@ static void *mmap(
 
 static e32 munmap(void *start, i64 size) {
     u64 return_value = syscall2(SYS_MUNMAP, (u64)start, (u64)size);
-    e32 error = syscall_error(return_value);
-    return error;
+    return syscall_error(return_value);
 }
 
 static e32 ioctl(i32 fd, i32 request, u8 *arg) {
@@ -448,6 +454,12 @@ static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_size_bytes) {
     return return_value;
 }
 
+static e32 clock_gettime(i32 clock_id, struct timespec *timespec) {
+    u64 return_value =
+        syscall2(SYS_CLOCK_GETTIME, (u64)clock_id, (u64)timespec);
+    return syscall_error(return_value);
+}
+
 static i32 epoll_wait(
     i32 epfd,
     struct epoll_event *events,
@@ -467,8 +479,7 @@ static i32 epoll_wait(
 static e32 epoll_ctl(i32 epfd, i32 op, i32 fd, struct epoll_event *event) {
     u64 return_value =
         syscall4(SYS_EPOLL_CTL, (u64)epfd, (u64)op, (u64)fd, (u64)event);
-    e32 error = syscall_error(return_value);
-    return error;
+    return syscall_error(return_value);
 }
 
 static i32 epoll_create1(void) {
@@ -489,6 +500,12 @@ static void *alloc(struct arena *arena, i64 size, i64 align) {
     u8 *p = arena->start + padding;
     arena->start += padding + size;
     return memset(p, 0, size);
+}
+
+static i64 nsec_since(struct timespec *end, struct timespec *start) {
+    i64 seconds = end->sec - start->sec;
+    i64 elapsed = (seconds * 1000L * 1000L * 1000L) + end->nsec;
+    return elapsed - start->nsec;
 }
 
 static i32 test_bit(u8 *bytes, i32 len, i32 bit_num) {
@@ -764,10 +781,12 @@ static e32 drm_mode_set_crtc(
     i32 fd,
     struct drm_mode_crtc *crtc,
     u32 *connectors,
-    i32 connectors_len
+    i32 connectors_len,
+    u32 fb_id
 ) {
     crtc->set_connectors = connectors;
     crtc->connectors_len = connectors_len;
+    crtc->fb_id = fb_id;
     return ioctl(fd, DRM_IOCTL_MODE_SETCRTC, (u8 *)crtc);
 }
 
@@ -825,6 +844,8 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     buf->map = mem;
     buf->fb_id = fb_cmd.fb_id;
 
+    memset(buf->map, 0, buf->size);
+
     return buf;
 }
 
@@ -857,14 +878,14 @@ static i32 cmain(i32 argc, cstring *argv) {
         return 2;
     }
 
-    error = ioctl(
-        keyboard_fd,
-        ((u32)0x90) | ((u32)'E' << 8) | (4 << 16) | (1U << 30),
-        (u8 *)1
-    );
-    if (error != 0) {
-        return 3;
-    }
+    // error = ioctl(
+    //     keyboard_fd,
+    //     ((u32)0x90) | ((u32)'E' << 8) | (4 << 16) | (1U << 30),
+    //     (u8 *)1
+    //);
+    // if (error != 0) {
+    //     return 3;
+    // }
 
     i32 card_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC, 0);
     if (card_fd < 0) {
@@ -906,21 +927,33 @@ static i32 cmain(i32 argc, cstring *argv) {
         return 8;
     }
 
-    struct drm_mode_dumb_buffer *buf = drm_mode_create_dumb_buffer(
+    i32 buf_index = 0;
+    struct drm_mode_dumb_buffer *bufs[2];
+    bufs[0] = drm_mode_create_dumb_buffer(
         &perm_arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
     );
-    if (buf == 0) {
+    bufs[1] = drm_mode_create_dumb_buffer(
+        &perm_arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
+    );
+    if (bufs[0] == 0 || bufs[1] == 0) {
         return 9;
     }
 
-    for (i32 i = 0; i < (i64)buf->size; i += 4) {
-        buf->map[i] = 0x0;
-        buf->map[i + 1] = 0xff;
-        buf->map[i + 2] = 0xff;
-        buf->map[i + 3] = 0xff;
+    for (i32 i = 0; i < 2; ++i) {
+        for (i32 y = 0; y < (i32)bufs[i]->height; y += 1) {
+            for (i32 x = 0; x < (i32)bufs[i]->width * 4; x += 4) {
+                bufs[i]->map[y * bufs[i]->stride + x] = 0x00;
+                bufs[i]->map[y * bufs[i]->stride + x + 1] = 0xff;
+                bufs[i]->map[y * bufs[i]->stride + x + 2] =
+                    (i == 0) ? 0x00 : 0xff;
+                bufs[i]->map[y * bufs[i]->stride + x + 3] = 0x00;
+            }
+        }
     }
 
-    error = drm_mode_set_crtc(card_fd, crtc, &conn->connector_id, 1);
+    error = drm_mode_set_crtc(
+        card_fd, crtc, &conn->connector_id, 1, bufs[0]->fb_id
+    );
     if (error != 0) {
         return 10;
     }
@@ -946,7 +979,7 @@ static i32 cmain(i32 argc, cstring *argv) {
     }
 
     error = drm_mode_page_flip(
-        card_fd, enc->crtc_id, buf->fb_id, DRM_MODE_PAGE_FLIP_EVENT, 0
+        card_fd, enc->crtc_id, bufs[0]->fb_id, DRM_MODE_PAGE_FLIP_EVENT, 0
     );
     if (error != 0) {
         return 14;
@@ -954,19 +987,48 @@ static i32 cmain(i32 argc, cstring *argv) {
 
     struct epoll_event ep_events[8];
     struct input_event kb_events[32];
-    struct drm_event_vblank drm_events[32];
+    struct drm_event_vblank drm_event;
+    struct timespec last_update, now;
+
+    error = clock_gettime(CLOCK_MONOTONIC, &now);
+    if (error != 0) {
+        return 14;
+    }
+
+    last_update = now;
+
     while (1) {
         i32 ep_count = epoll_wait(
             epoll_fd, ep_events, sizeof(ep_events) / sizeof(*ep_events), 0
         );
         if (ep_count < 0) {
-            return 18;
+            return 15;
         }
+
+        error = clock_gettime(CLOCK_MONOTONIC, &now);
+        if (error != 0) {
+            return 16;
+        }
+        i64 ns_elapsed = nsec_since(&now, &last_update);
+
+        if (ns_elapsed >= 1000L * 1000L * 1000L) {
+            buf_index ^= 1;
+            last_update = now;
+
+            u8 msg[5];
+            msg[0] = '0' + (u8)((ns_elapsed / (1000 * 1000 * 1000)) % 10);
+            msg[1] = '0' + (u8)((ns_elapsed / (100 * 1000 * 1000)) % 10);
+            msg[2] = '0' + (u8)((ns_elapsed / (10 * 1000 * 1000)) % 10);
+            msg[3] = '0' + (u8)((ns_elapsed / (1000 * 1000)) % 10);
+            msg[4] = '\n';
+            write(1, msg, sizeof(msg));
+        }
+
         for (i32 ep_index = 0; ep_index < ep_count; ++ep_index) {
             if (ep_events[ep_index].data.fd == keyboard_fd) {
                 i64 len = read(keyboard_fd, (u8 *)kb_events, sizeof(kb_events));
                 if (len < 0) {
-                    return 17;
+                    return 16;
                 }
                 for (i32 i = 0; i < (i32)(len / sizeof(*kb_events)); ++i) {
                     if (kb_events[i].type == 1 && kb_events[i].value == 1) {
@@ -979,20 +1041,20 @@ static i32 cmain(i32 argc, cstring *argv) {
                     }
                 }
             } else {
-                i64 len = read(card_fd, (u8 *)drm_events, sizeof(drm_events));
+                i64 len = read(card_fd, (u8 *)&drm_event, sizeof(drm_event));
                 if (len < 0) {
-                    return 15;
+                    return 17;
                 }
 
                 error = drm_mode_page_flip(
                     card_fd,
                     enc->crtc_id,
-                    buf->fb_id,
+                    bufs[buf_index]->fb_id,
                     DRM_MODE_PAGE_FLIP_EVENT,
                     0
                 );
                 if (error != 0) {
-                    return 16;
+                    return 18;
                 }
             }
         }
