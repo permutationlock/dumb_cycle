@@ -216,14 +216,6 @@ struct drm_mode_crtc {
     struct drm_mode_modeinfo mode;
 };
 
-struct drm_mode_crtc_page_flip {
-    u32 crtc_id;
-    u32 fb_id;
-    u32 flags;
-    u32 reserved;
-    void *data;
-};
-
 struct drm_mode_fb_cmd {
     u32 fb_id;
     u32 width;
@@ -256,22 +248,8 @@ struct drm_mode_dumb_buffer {
     u32 stride;
     u32 handle;
     u32 fb_id;
-    u8 *map;
+    u32 *map;
     u64 size;
-};
-
-struct drm_event {
-    u32 type;
-    u32 length;
-};
-
-struct drm_event_vblank {
-    struct drm_event base;
-    void *data;
-    u32 tv_sec;
-    u32 tv_usec;
-    u32 sequence;
-    u32 crtc_id;
 };
 
 enum drm_ioctl_mode {
@@ -286,11 +264,6 @@ enum drm_ioctl_mode {
     DRM_IOCTL_MODE_MAP_DUMB = (i32)0xc01064b3
 };
 enum drm_mode { DRM_MODE_CONNECTED = 1 };
-enum drm_mode_page_flip_event {
-    DRM_EVENT_VBLANK = 0x01,
-    DRM_EVENT_FLIP_COMPLETE = 0x02
-};
-enum drm_mode_page_flip_flag { DRM_MODE_PAGE_FLIP_EVENT = 0x01 };
 
 static struct drm_mode_resources *drm_mode_get_resources(
     struct arena *perm_arena,
@@ -324,13 +297,28 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     u32 width,
     u32 height
 );
-static e32 drm_mode_page_flip(
-    i32 fd,
-    u32 crtc_id,
-    u32 fb_id,
-    u32 flags,
-    void *data
-);
+
+enum color {
+    BLACK = 0x000000,
+    RED = 0x0000ff,
+    GREEN = 0x00ff00,
+    BLUE = 0xff0000,
+    WHITE = 0xffffff,
+    GRAY = 0xfefefef
+};
+
+struct game_state {
+    i32 x;
+    i32 y;
+    i32 vx;
+    i32 vy;
+    i32 dead;
+    u8 board[90 * 90];
+};
+
+static void update_game_state(struct game_state *state);
+static void clear_game_state(struct game_state *state);
+static void draw_board(struct drm_mode_dumb_buffer *buf, struct game_state *state, i32 x, i32 y, i32 scale);
 
 static void *memcpy(void *restrict dest, const void *restrict src, u64 count) {
     u8 *d = dest;
@@ -827,7 +815,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
         return 0;
     }
 
-    u8 *mem = (u8 *)mmap(
+    u32 *mem = mmap(
         0, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mreq.offset
     );
     if (mem == 0) {
@@ -838,7 +826,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     buf = alloc(perm_arena, sizeof(*buf), 16);
     buf->width = width;
     buf->height = height;
-    buf->stride = creq.pitch;
+    buf->stride = creq.pitch / sizeof(u32);
     buf->size = creq.size;
     buf->handle = creq.handle;
     buf->map = mem;
@@ -849,17 +837,45 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     return buf;
 }
 
-static e32 drm_mode_page_flip(
-    i32 fd,
-    u32 crtc_id,
-    u32 fb_id,
-    u32 flags,
-    void *data
-) {
-    struct drm_mode_crtc_page_flip flip = {
-        .fb_id = fb_id, .crtc_id = crtc_id, .flags = flags, .data = data
-    };
-    return ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, (u8 *)&flip);
+static void update_game_state(struct game_state *state) {
+    state->board[state->y * 90 + state->x] = 1;
+    state->y += state->vy;
+    state->x += state->vx;
+
+    if (state->board[state->y * 90 + state->x] != 0 || state->x == 89 || state->x == 0 || state->y == 89 || state->y == 0) {
+        state->board[state->y * 90 + state->x] = 4;
+        state->dead = 1;
+    }
+
+    state->board[state->y * 90 + state->x] = 3;
+}
+
+static void clear_game_state(struct game_state *state) {
+    memset(state, 0, sizeof(*state));
+    state->x = 45;
+    state->y = 45;
+    state->vx = 1;
+    state->vy = 0;
+    state->dead = 0;
+}
+
+static void draw_board(struct drm_mode_dumb_buffer *buf, struct game_state *state, i32 x, i32 y, i32 scale) {
+    for (i32 i = 0; i < 90; ++i) {
+        for (i32 yoff = 0; yoff < scale; ++yoff) {
+            i32 cy = cy = y + i * scale + yoff;
+            for (i32 j = 0; j < 90; ++j) {
+                for (i32 xoff = 0; xoff < scale; ++xoff) {
+                    i32 cx = x + j * scale + xoff;
+                    i32 pixel_index = cy * buf->stride + cx;
+                    if (state->board[i * 90 + j] == 0) {
+                        buf->map[pixel_index] = (u32)GRAY;
+                    } else {
+                        buf->map[pixel_index] = (u32)BLUE;
+                    }
+                }
+            }
+        }
+    }
 }
 
 static i32 cmain(i32 argc, cstring *argv) {
@@ -878,14 +894,14 @@ static i32 cmain(i32 argc, cstring *argv) {
         return 2;
     }
 
-    // error = ioctl(
-    //     keyboard_fd,
-    //     ((u32)0x90) | ((u32)'E' << 8) | (4 << 16) | (1U << 30),
-    //     (u8 *)1
-    //);
-    // if (error != 0) {
-    //     return 3;
-    // }
+    error = ioctl(
+        keyboard_fd,
+        ((u32)0x90) | ((u32)'E' << 8) | (4 << 16) | (1U << 30),
+        (u8 *)1
+    );
+    if (error != 0) {
+        return 3;
+    }
 
     i32 card_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC, 0);
     if (card_fd < 0) {
@@ -939,28 +955,9 @@ static i32 cmain(i32 argc, cstring *argv) {
         return 9;
     }
 
-    for (i32 i = 0; i < 2; ++i) {
-        for (i32 y = 0; y < (i32)bufs[i]->height; y += 1) {
-            for (i32 x = 0; x < (i32)bufs[i]->width * 4; x += 4) {
-                bufs[i]->map[y * bufs[i]->stride + x] = 0x00;
-                bufs[i]->map[y * bufs[i]->stride + x + 1] = 0xff;
-                bufs[i]->map[y * bufs[i]->stride + x + 2] =
-                    (i == 0) ? 0x00 : 0xff;
-                bufs[i]->map[y * bufs[i]->stride + x + 3] = 0x00;
-            }
-        }
-    }
-
-    error = drm_mode_set_crtc(
-        card_fd, crtc, &conn->connector_id, 1, bufs[0]->fb_id
-    );
-    if (error != 0) {
-        return 10;
-    }
-
     i32 epoll_fd = epoll_create1();
     if (epoll_fd < 0) {
-        return 11;
+        return 10;
     }
 
     struct epoll_event epoll_event = {
@@ -969,32 +966,38 @@ static i32 cmain(i32 argc, cstring *argv) {
     };
     error = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, keyboard_fd, &epoll_event);
     if (error != 0) {
-        return 12;
+        return 11;
     }
 
-    epoll_event.data.fd = card_fd;
-    error = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, card_fd, &epoll_event);
-    if (error != 0) {
-        return 13;
-    }
 
-    error = drm_mode_page_flip(
-        card_fd, enc->crtc_id, bufs[0]->fb_id, DRM_MODE_PAGE_FLIP_EVENT, 0
+    struct game_state game_state;
+    clear_game_state(&game_state);
+
+    i32 width = (i32)bufs[0]->width;
+    i32 height = (i32)bufs[0]->height;
+    i32 square_len = (height > width) ? width : height;
+    i32 scale = square_len / 90;
+    i32 board_size = square_len - (square_len % 90);
+    i32 board_x = (width / 2) - (board_size / 2);
+    i32 board_y = (height / 2) - (board_size / 2);
+
+    draw_board(bufs[buf_index], &game_state, board_x, board_y, scale);
+    error = drm_mode_set_crtc(
+        card_fd, crtc, &conn->connector_id, 1, bufs[0]->fb_id
     );
     if (error != 0) {
-        return 14;
+        return 12;
     }
+    buf_index ^= 1;
 
-    struct epoll_event ep_events[8];
+    struct epoll_event ep_events[32];
     struct input_event kb_events[32];
-    struct drm_event_vblank drm_event;
     struct timespec last_update, now;
 
     error = clock_gettime(CLOCK_MONOTONIC, &now);
     if (error != 0) {
-        return 14;
+        return 13;
     }
-
     last_update = now;
 
     while (1) {
@@ -1009,20 +1012,8 @@ static i32 cmain(i32 argc, cstring *argv) {
         if (error != 0) {
             return 16;
         }
+
         i64 ns_elapsed = nsec_since(&now, &last_update);
-
-        if (ns_elapsed >= 1000L * 1000L * 1000L) {
-            buf_index ^= 1;
-            last_update = now;
-
-            u8 msg[5];
-            msg[0] = '0' + (u8)((ns_elapsed / (1000 * 1000 * 1000)) % 10);
-            msg[1] = '0' + (u8)((ns_elapsed / (100 * 1000 * 1000)) % 10);
-            msg[2] = '0' + (u8)((ns_elapsed / (10 * 1000 * 1000)) % 10);
-            msg[3] = '0' + (u8)((ns_elapsed / (1000 * 1000)) % 10);
-            msg[4] = '\n';
-            write(1, msg, sizeof(msg));
-        }
 
         for (i32 ep_index = 0; ep_index < ep_count; ++ep_index) {
             if (ep_events[ep_index].data.fd == keyboard_fd) {
@@ -1035,28 +1026,65 @@ static i32 cmain(i32 argc, cstring *argv) {
                         switch (kb_events[i].code) {
                             case KEY_ESC:
                                 return 0;
+                            case KEY_A:
+                                if (game_state.vx <= 0) {
+                                    game_state.vx = -1;
+                                    game_state.vy = 0;
+                                }
+                                break;
+                            case KEY_D:
+                                if (game_state.vx >= 0) {
+                                    game_state.vx = 1;
+                                    game_state.vy = 0;
+                                }
+                                break;
+                            case KEY_W:
+                                if (game_state.vy <= 0) {
+                                    game_state.vx = 0;
+                                    game_state.vy = -1;
+                                }
+                                break;
+                            case KEY_S:
+                                if (game_state.vy >= 0) {
+                                    game_state.vx = 0;
+                                    game_state.vy = 1;
+                                }
+                                break;
                             default:
                                 continue;
                         }
                     }
                 }
-            } else {
-                i64 len = read(card_fd, (u8 *)&drm_event, sizeof(drm_event));
-                if (len < 0) {
-                    return 17;
-                }
-
-                error = drm_mode_page_flip(
-                    card_fd,
-                    enc->crtc_id,
-                    bufs[buf_index]->fb_id,
-                    DRM_MODE_PAGE_FLIP_EVENT,
-                    0
-                );
-                if (error != 0) {
-                    return 18;
-                }
             }
+        }
+
+        if (ns_elapsed >= 32L * 1000L * 1000L) {
+            last_update = now;
+
+            update_game_state(&game_state);
+            draw_board(bufs[buf_index], &game_state, board_x, board_y, scale);
+
+            error = drm_mode_set_crtc(
+                card_fd, crtc, &conn->connector_id, 1, bufs[buf_index]->fb_id
+            );
+            if (error != 0) {
+                return 10;
+            }
+
+            buf_index ^= 1;
+
+            if (game_state.dead != 0) {
+                clear_game_state(&game_state);
+            }
+
+            u8 msg[6];
+            msg[0] = 'u';
+            msg[1] = '0' + (u8)((ns_elapsed / (1000 * 1000 * 1000)) % 10);
+            msg[2] = '0' + (u8)((ns_elapsed / (100 * 1000 * 1000)) % 10);
+            msg[3] = '0' + (u8)((ns_elapsed / (10 * 1000 * 1000)) % 10);
+            msg[4] = '0' + (u8)((ns_elapsed / (1000 * 1000)) % 10);
+            msg[5] = '\n';
+            write(1, msg, sizeof(msg));
         }
     }
 
