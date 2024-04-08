@@ -300,11 +300,11 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
 
 enum color {
     BLACK = 0x000000,
-    RED = 0x0000ff,
+    RED = 0xff0000,
     GREEN = 0x00ff00,
-    BLUE = 0xff0000,
+    BLUE = 0x0000ff,
     WHITE = 0xffffff,
-    GRAY = 0xfefefef
+    GRAY = 0xededed
 };
 
 struct game_state {
@@ -318,7 +318,13 @@ struct game_state {
 
 static void update_game_state(struct game_state *state);
 static void clear_game_state(struct game_state *state);
-static void draw_board(struct drm_mode_dumb_buffer *buf, struct game_state *state, i32 x, i32 y, i32 scale);
+static void draw_board(
+    struct drm_mode_dumb_buffer *buf,
+    struct game_state *state,
+    i32 x,
+    i32 y,
+    i32 scale
+);
 
 static void *memcpy(void *restrict dest, const void *restrict src, u64 count) {
     u8 *d = dest;
@@ -815,9 +821,8 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
         return 0;
     }
 
-    u32 *mem = mmap(
-        0, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mreq.offset
-    );
+    u32 *mem =
+        mmap(0, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mreq.offset);
     if (mem == 0) {
         return 0;
     }
@@ -827,7 +832,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     buf->width = width;
     buf->height = height;
     buf->stride = creq.pitch / sizeof(u32);
-    buf->size = creq.size;
+    buf->size = creq.size / sizeof(u32);
     buf->handle = creq.handle;
     buf->map = mem;
     buf->fb_id = fb_cmd.fb_id;
@@ -842,7 +847,8 @@ static void update_game_state(struct game_state *state) {
     state->y += state->vy;
     state->x += state->vx;
 
-    if (state->board[state->y * 90 + state->x] != 0 || state->x == 89 || state->x == 0 || state->y == 89 || state->y == 0) {
+    if (state->board[state->y * 90 + state->x] != 0 || state->x == 89 ||
+        state->x == 0 || state->y == 89 || state->y == 0) {
         state->board[state->y * 90 + state->x] = 4;
         state->dead = 1;
     }
@@ -859,7 +865,13 @@ static void clear_game_state(struct game_state *state) {
     state->dead = 0;
 }
 
-static void draw_board(struct drm_mode_dumb_buffer *buf, struct game_state *state, i32 x, i32 y, i32 scale) {
+static void draw_board(
+    struct drm_mode_dumb_buffer *buf,
+    struct game_state *state,
+    i32 x,
+    i32 y,
+    i32 scale
+) {
     for (i32 i = 0; i < 90; ++i) {
         for (i32 yoff = 0; yoff < scale; ++yoff) {
             i32 cy = cy = y + i * scale + yoff;
@@ -923,7 +935,7 @@ static i32 cmain(i32 argc, cstring *argv) {
         if (conn == 0) {
             continue;
         }
-        if (conn->connection == DRM_MODE_CONNECTED || conn->modes_len != 0) {
+        if (conn->connection == DRM_MODE_CONNECTED && conn->modes_len != 0) {
             break;
         }
     }
@@ -969,18 +981,30 @@ static i32 cmain(i32 argc, cstring *argv) {
         return 11;
     }
 
-
     struct game_state game_state;
     clear_game_state(&game_state);
 
     i32 width = (i32)bufs[0]->width;
-    i32 height = (i32)bufs[0]->height;
-    i32 square_len = (height > width) ? width : height;
-    i32 scale = square_len / 90;
-    i32 board_size = square_len - (square_len % 90);
-    i32 board_x = (width / 2) - (board_size / 2);
-    i32 board_y = (height / 2) - (board_size / 2);
+     i32 height = (i32)bufs[0]->height;
+      i32 square_len = (height > width) ? width : height;
+      i32 scale = square_len / 90;
+      i32 board_size = square_len - (square_len % 90);
+      i32 board_x = (width / 2) - (board_size / 2);
+      i32 board_y = (height / 2) - (board_size / 2);
 
+    u8 msg[5];
+    msg[0] = '0' + (u8)((width / 1000) % 10);
+    msg[1] = '0' + (u8)((width / 100) % 10);
+    msg[2] = '0' + (u8)((width / 10) % 10);
+    msg[3] = '0' + (u8)(width % 10);
+    msg[4] = '\n';
+    write(1, msg, sizeof(msg));
+
+    for (i32 bi = 0; bi < 2; ++bi) {
+        for (i32 i = 0; i < (i32)bufs[bi]->size; ++i) {
+            bufs[bi]->map[i] = RED;
+        }
+    }
     draw_board(bufs[buf_index], &game_state, board_x, board_y, scale);
     error = drm_mode_set_crtc(
         card_fd, crtc, &conn->connector_id, 1, bufs[0]->fb_id
@@ -1077,14 +1101,14 @@ static i32 cmain(i32 argc, cstring *argv) {
                 clear_game_state(&game_state);
             }
 
-            u8 msg[6];
-            msg[0] = 'u';
-            msg[1] = '0' + (u8)((ns_elapsed / (1000 * 1000 * 1000)) % 10);
-            msg[2] = '0' + (u8)((ns_elapsed / (100 * 1000 * 1000)) % 10);
-            msg[3] = '0' + (u8)((ns_elapsed / (10 * 1000 * 1000)) % 10);
-            msg[4] = '0' + (u8)((ns_elapsed / (1000 * 1000)) % 10);
-            msg[5] = '\n';
-            write(1, msg, sizeof(msg));
+            // u8 msg[6];
+            // msg[0] = 'u';
+            // msg[1] = '0' + (u8)((ns_elapsed / (1000 * 1000 * 1000)) % 10);
+            // msg[2] = '0' + (u8)((ns_elapsed / (100 * 1000 * 1000)) % 10);
+            // msg[3] = '0' + (u8)((ns_elapsed / (10 * 1000 * 1000)) % 10);
+            // msg[4] = '0' + (u8)((ns_elapsed / (1000 * 1000)) % 10);
+            // msg[5] = '\n';
+            // write(1, msg, sizeof(msg));
         }
     }
 
