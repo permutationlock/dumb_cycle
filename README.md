@@ -2,7 +2,7 @@
 
 A simple Snake/LightCycle game for `x86_64` Linux implemented in
 assembly and C99 with no linked libraries (no libc) and no preprocessor
-directives (no `#ifdefs`,  `#define`, `#include`, etc).
+directives (no `#ifdef`,  `#define`, `#include`, etc).
 
 Images are drawn to the screen using the "dumb buffer" API provided by the
 Direct Rendering Manager (DRM) subsystem of Linux. Keyboard input is read
