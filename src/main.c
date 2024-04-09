@@ -68,7 +68,7 @@ static i32 open(char *fname, i32 flags, i32 mode);
 static e32 close(i32 fd);
 static void *mmap(
     void *hint,
-    i64 size,
+    u64 size,
     i32 prot,
     i32 flags,
     i32 fd,
@@ -81,7 +81,7 @@ static e32 clock_gettime(i32 clock_id, struct timespec *timespec);
 static i32 epoll_wait(
     i32 epfd,
     struct epoll_event *events,
-    i32 events_len,
+    u32 events_len,
     i32 timeout_ms
 );
 static e32 epoll_ctl(i32 epfd, i32 op, i32 fd, struct epoll_event *event);
@@ -92,7 +92,7 @@ struct arena {
     char *end;
 };
 
-static void *alloc(struct arena *arena, i64 size);
+static void *alloc(struct arena *arena, u64 size);
 
 static i64 nsec_since(struct timespec *end, struct timespec *start);
 
@@ -115,12 +115,12 @@ struct input_event {
     i32 value;
 };
 
-static i32 test_bit(char *bytes, i32 len, i32 bit_num);
+static i32 test_bit(char *bytes, u32 len, u32 bit_num);
 static e32 evioctl(
     i32 fd,
-    u32 direction,
-    u32 type,
-    u32 event_code,
+    i32 direction,
+    i32 type,
+    i32 event_code,
     u32 size,
     char *data
 );
@@ -133,10 +133,10 @@ struct drm_mode_resources {
     u32 *connectors;
     u32 *encoders;
 
-    i32 fbs_len;
-    i32 crtcs_len;
-    i32 connectors_len;
-    i32 encoders_len;
+    u32 fbs_len;
+    u32 crtcs_len;
+    u32 connectors_len;
+    u32 encoders_len;
 
     u32 min_width;
     u32 max_width;
@@ -236,7 +236,7 @@ struct drm_mode_create_dumb {
 struct drm_mode_map_dumb {
     u32 handle;
     u32 pad;
-    u64 offset;
+    i64 offset;
 };
 
 struct drm_mode_dumb_buffer {
@@ -285,7 +285,7 @@ static e32 drm_mode_set_crtc(
     i32 fd,
     struct drm_mode_crtc *crtc,
     u32 *connectors,
-    i32 connectors_len,
+    u32 connectors_len,
     u32 fb_id
 );
 static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
@@ -318,9 +318,9 @@ static void clear_game_state(struct game_state *state);
 static void draw_board(
     struct drm_mode_dumb_buffer *buf,
     struct game_state *state,
-    i32 x,
-    i32 y,
-    i32 scale
+    u32 x,
+    u32 y,
+    u32 scale
 );
 
 static void *memcpy(void *restrict dest, const void *restrict src, u64 count) {
@@ -387,14 +387,21 @@ static e32 close(i32 fd) {
 
 static void *mmap(
     void *hint,
-    i64 size,
+    u64 size,
     i32 prot,
     i32 flags,
     i32 fd,
     i64 offset
 ) {
-    i64 return_value =
-        syscall6(SYS_MMAP, (u64)hint, (u64)size, prot, flags, fd, offset);
+    u64 return_value = syscall6(
+        SYS_MMAP,
+        (u64)hint,
+        (u64)size,
+        (u64)prot,
+        (u64)flags,
+        (u64)fd,
+        (u64)offset
+    );
     e32 error = syscall_error(return_value);
     if (error != 0) {
         return 0;
@@ -423,7 +430,7 @@ static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_size_bytes) {
     if (error != 0) {
         return -error;
     }
-    return return_value;
+    return (i64)return_value;
 }
 
 static e32 clock_gettime(i32 clock_id, struct timespec *timespec) {
@@ -435,7 +442,7 @@ static e32 clock_gettime(i32 clock_id, struct timespec *timespec) {
 static i32 epoll_wait(
     i32 epfd,
     struct epoll_event *events,
-    i32 events_len,
+    u32 events_len,
     i32 timeout_ms
 ) {
     u64 return_value = syscall4(
@@ -463,15 +470,15 @@ static i32 epoll_create1(void) {
     return (i32)return_value;
 }
 
-static void *alloc(struct arena *arena, i64 size) {
+static void *alloc(struct arena *arena, u64 size) {
     i64 available = arena->end - arena->start;
     i64 padding = -(u64)arena->start & (16 - 1);
-    if (size > (available - padding)) {
+    if (size > (u64)(available - padding)) {
         return 0;
     }
     char *p = arena->start + padding;
-    arena->start += padding + size;
-    return memset(p, 0, size);
+    arena->start += (u64)padding + size;
+    return memset(p, 0, (u64)size);
 }
 
 static i64 nsec_since(struct timespec *end, struct timespec *start) {
@@ -480,9 +487,9 @@ static i64 nsec_since(struct timespec *end, struct timespec *start) {
     return elapsed - start->nsec;
 }
 
-static i32 test_bit(char *bytes, i32 len, i32 bit_num) {
-    i32 byte_index = bit_num / 8;
-    i32 bit_index = bit_num % 8;
+static i32 test_bit(char *bytes, u32 len, u32 bit_num) {
+    u32 byte_index = bit_num / 8;
+    u32 bit_index = bit_num % 8;
     if (byte_index >= len) {
         return 0;
     }
@@ -492,16 +499,16 @@ static i32 test_bit(char *bytes, i32 len, i32 bit_num) {
 
 static e32 evioctl(
     i32 fd,
-    u32 direction,
-    u32 type,
-    u32 event_code,
+    i32 direction,
+    i32 type,
+    i32 event_code,
     u32 size,
     char *data
 ) {
     return ioctl(
         fd,
-        ((u32)type + event_code) | ((u32)'E' << 8) | ((u32)size << 16) |
-            ((u32)direction << 30),
+        (type + event_code) | ((i32)'E' << 8) | ((i32)size << 16) |
+            (direction << 30),
         data
     );
 }
@@ -758,7 +765,7 @@ static e32 drm_mode_set_crtc(
     i32 fd,
     struct drm_mode_crtc *crtc,
     u32 *connectors,
-    i32 connectors_len,
+    u32 connectors_len,
     u32 fb_id
 ) {
     crtc->set_connectors = connectors;
@@ -850,17 +857,17 @@ static void clear_game_state(struct game_state *state) {
 static void draw_board(
     struct drm_mode_dumb_buffer *buf,
     struct game_state *state,
-    i32 x,
-    i32 y,
-    i32 scale
+    u32 x,
+    u32 y,
+    u32 scale
 ) {
-    for (i32 i = 0; i < 90; ++i) {
-        for (i32 yoff = 0; yoff < scale; ++yoff) {
-            i32 cy = cy = y + i * scale + yoff;
-            for (i32 j = 0; j < 90; ++j) {
-                for (i32 xoff = 0; xoff < scale; ++xoff) {
-                    i32 cx = x + j * scale + xoff;
-                    i32 pixel_index = cy * buf->stride + cx;
+    for (u32 i = 0; i < 90; ++i) {
+        for (u32 yoff = 0; yoff < scale; ++yoff) {
+            u32 cy = cy = y + i * scale + yoff;
+            for (u32 j = 0; j < 90; ++j) {
+                for (u32 xoff = 0; xoff < scale; ++xoff) {
+                    u32 cx = x + j * scale + xoff;
+                    u32 pixel_index = cy * buf->stride + cx;
                     if (state->board[i * 90 + j] == 0) {
                         buf->map[pixel_index] = (u32)COLOR_GRAY;
                     } else {
@@ -893,7 +900,7 @@ enum cmain_error {
 
 static e32 cmain(i32 argc, char **argv) {
     e32 error;
-    i64 arena_size = 2000 * 4096;
+    u64 arena_size = 2000 * 4096;
     char *mem = mmap(
         0, arena_size, PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANON, -1, 0
     );
@@ -923,7 +930,7 @@ static e32 cmain(i32 argc, char **argv) {
         return CMAIN_ERROR_DRM_GET_RESOURCES;
     }
 
-    i32 conn_index;
+    u32 conn_index;
     struct drm_mode_connector *conn = 0;
     for (conn_index = 0; conn_index < res->connectors_len; ++conn_index) {
         conn = drm_mode_get_connector(
@@ -946,7 +953,7 @@ static e32 cmain(i32 argc, char **argv) {
         return CMAIN_ERROR_DRM_GET_ENCODER;
     }
 
-    i32 buf_index = 0;
+    u32 buf_index = 0;
     struct drm_mode_dumb_buffer *bufs[2];
     bufs[0] = drm_mode_create_dumb_buffer(
         &perm_arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
@@ -969,16 +976,16 @@ static e32 cmain(i32 argc, char **argv) {
     struct game_state game_state;
     clear_game_state(&game_state);
 
-    i32 width = (i32)bufs[0]->width;
-    i32 height = (i32)bufs[0]->height;
-    i32 square_len = (height > width) ? width : height;
-    i32 scale = square_len / 90;
-    i32 board_size = square_len - (square_len % 90);
-    i32 board_x = (width / 2) - (board_size / 2);
-    i32 board_y = (height / 2) - (board_size / 2);
+    u32 width = bufs[0]->width;
+    u32 height = bufs[0]->height;
+    u32 square_len = (height > width) ? width : height;
+    u32 scale = square_len / 90;
+    u32 board_size = square_len - (square_len % 90);
+    u32 board_x = (width / 2) - (board_size / 2);
+    u32 board_y = (height / 2) - (board_size / 2);
 
-    for (i32 bi = 0; bi < 2; ++bi) {
-        for (i32 i = 0; i < (i32)bufs[bi]->size; ++i) {
+    for (u32 bi = 0; bi < 2; ++bi) {
+        for (u32 i = 0; i < bufs[bi]->size; ++i) {
             bufs[bi]->map[i] = COLOR_BLACK;
         }
     }
@@ -1030,14 +1037,14 @@ static e32 cmain(i32 argc, char **argv) {
 
         i64 ns_elapsed = nsec_since(&now, &last_update);
 
-        for (i32 ep_index = 0; ep_index < ep_count; ++ep_index) {
+        for (u32 ep_index = 0; ep_index < (u32)ep_count; ++ep_index) {
             if (ep_events[ep_index].data.fd == keyboard_fd) {
                 i64 len =
                     read(keyboard_fd, (char *)kb_events, sizeof(kb_events));
                 if (len < 0) {
                     return CMAIN_ERROR_KEYBOARD_READ;
                 }
-                for (i32 i = 0; i < (i32)(len / sizeof(*kb_events)); ++i) {
+                for (u32 i = 0; i < ((u64)len / sizeof(*kb_events)); ++i) {
                     if (kb_events[i].type == 1 && kb_events[i].value == 1) {
                         switch (kb_events[i].code) {
                             case KEY_ESC:

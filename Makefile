@@ -1,10 +1,9 @@
 CC = gcc
-CFLAGS = -std=c99 -O2 -fstrict-aliasing -fno-stack-protector -nostdlib \
+CFLAGS = -std=c99 -O2 -nostdlib -fstrict-aliasing -fno-stack-protector \
 		 -fno-unwind-tables -fno-asynchronous-unwind-tables \
 		 -pedantic -Wall -Wextra -Werror -Wconversion -Wdouble-promotion \
 		 -Wcast-align -Wstrict-prototypes -Wold-style-definition \
-		 -Wno-unused-parameter -Wno-sign-conversion \
-		 -fsanitize=undefined -fsanitize-trap
+		 -Wno-unused-parameter -fsanitize=undefined -fsanitize-trap
 AS = as
 LINKER = ld
 
