@@ -299,12 +299,12 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
 );
 
 enum color {
-    BLACK = 0x000000,
-    RED = 0xff0000,
-    GREEN = 0x00ff00,
-    BLUE = 0x0000ff,
-    WHITE = 0xffffff,
-    GRAY = 0xededed
+    COLOR_BLACK = 0x000000,
+    COLOR_RED = 0xff0000,
+    COLOR_GREEN = 0x00ff00,
+    COLOR_BLUE = 0x0000ff,
+    COLOR_WHITE = 0xffffff,
+    COLOR_GRAY = 0xededed
 };
 
 struct game_state {
@@ -880,9 +880,9 @@ static void draw_board(
                     i32 cx = x + j * scale + xoff;
                     i32 pixel_index = cy * buf->stride + cx;
                     if (state->board[i * 90 + j] == 0) {
-                        buf->map[pixel_index] = (u32)GRAY;
+                        buf->map[pixel_index] = (u32)COLOR_GRAY;
                     } else {
-                        buf->map[pixel_index] = (u32)BLUE;
+                        buf->map[pixel_index] = (u32)COLOR_BLUE;
                     }
                 }
             }
@@ -949,12 +949,6 @@ static i32 cmain(i32 argc, cstring *argv) {
         return 7;
     }
 
-    struct drm_mode_crtc *crtc =
-        drm_mode_get_crtc(&perm_arena, card_fd, enc->crtc_id);
-    if (crtc == 0) {
-        return 8;
-    }
-
     i32 buf_index = 0;
     struct drm_mode_dumb_buffer *bufs[2];
     bufs[0] = drm_mode_create_dumb_buffer(
@@ -964,8 +958,49 @@ static i32 cmain(i32 argc, cstring *argv) {
         &perm_arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
     );
     if (bufs[0] == 0 || bufs[1] == 0) {
+        return 8;
+    }
+
+    struct drm_mode_crtc *crtc =
+        drm_mode_get_crtc(&perm_arena, card_fd, enc->crtc_id);
+    if (crtc == 0) {
         return 9;
     }
+
+    crtc->mode = conn->modes[0];
+
+    struct game_state game_state;
+    clear_game_state(&game_state);
+
+    i32 width = (i32)bufs[0]->width;
+    i32 height = (i32)bufs[0]->height;
+    i32 square_len = (height > width) ? width : height;
+    i32 scale = square_len / 90;
+    i32 board_size = square_len - (square_len % 90);
+    i32 board_x = (width / 2) - (board_size / 2);
+    i32 board_y = (height / 2) - (board_size / 2);
+
+    u8 msg[5];
+    msg[0] = '0' + (u8)((width / 1000) % 10);
+    msg[1] = '0' + (u8)((width / 100) % 10);
+    msg[2] = '0' + (u8)((width / 10) % 10);
+    msg[3] = '0' + (u8)(width % 10);
+    msg[4] = '\n';
+    write(1, msg, sizeof(msg));
+
+    for (i32 bi = 0; bi < 2; ++bi) {
+        for (i32 i = 0; i < (i32)bufs[bi]->size; ++i) {
+            bufs[bi]->map[i] = COLOR_BLACK;
+        }
+    }
+    draw_board(bufs[buf_index], &game_state, board_x, board_y, scale);
+    error = drm_mode_set_crtc(
+        card_fd, crtc, &conn->connector_id, 1, bufs[0]->fb_id
+    );
+    if (error != 0) {
+        return 12;
+    }
+    buf_index ^= 1;
 
     i32 epoll_fd = epoll_create1();
     if (epoll_fd < 0) {
@@ -980,39 +1015,6 @@ static i32 cmain(i32 argc, cstring *argv) {
     if (error != 0) {
         return 11;
     }
-
-    struct game_state game_state;
-    clear_game_state(&game_state);
-
-    i32 width = (i32)bufs[0]->width;
-     i32 height = (i32)bufs[0]->height;
-      i32 square_len = (height > width) ? width : height;
-      i32 scale = square_len / 90;
-      i32 board_size = square_len - (square_len % 90);
-      i32 board_x = (width / 2) - (board_size / 2);
-      i32 board_y = (height / 2) - (board_size / 2);
-
-    u8 msg[5];
-    msg[0] = '0' + (u8)((width / 1000) % 10);
-    msg[1] = '0' + (u8)((width / 100) % 10);
-    msg[2] = '0' + (u8)((width / 10) % 10);
-    msg[3] = '0' + (u8)(width % 10);
-    msg[4] = '\n';
-    write(1, msg, sizeof(msg));
-
-    for (i32 bi = 0; bi < 2; ++bi) {
-        for (i32 i = 0; i < (i32)bufs[bi]->size; ++i) {
-            bufs[bi]->map[i] = RED;
-        }
-    }
-    draw_board(bufs[buf_index], &game_state, board_x, board_y, scale);
-    error = drm_mode_set_crtc(
-        card_fd, crtc, &conn->connector_id, 1, bufs[0]->fb_id
-    );
-    if (error != 0) {
-        return 12;
-    }
-    buf_index ^= 1;
 
     struct epoll_event ep_events[32];
     struct input_event kb_events[32];
