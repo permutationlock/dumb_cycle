@@ -23,8 +23,8 @@ lines of simple and readable `x86_64` assembly.
  - [linux kernel][6]
  - [drm\_howto][7]
 
- [^1]: The game must have permissions to open the video device `/dev/drm/card0`
-    and the input devices in `/dev/input/`.
+ [^1]: The executable must have permissions to open the video device
+    `/dev/dri/card0` and the input devices in `/dev/input/`.
     No other programs should be drawing to `/dev/drm/card0`, i.e.
     you need to close your X11 and/or Wayland server.
 
