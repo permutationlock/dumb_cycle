@@ -12,7 +12,7 @@ Linux system with DRM support, a video card, and a keyboard.
 DumbCycle can be compiled with any C compiler that supports C99 and ATT
 syntax `x86_64` assembly. The primary motivation for eschewing the C
 preprocessor is to allow the project to compile using only
-[cproc-qbe][1], [QBE][2], and [GNU binutils][3] (for `as` and `ld`)].
+[cproc-qbe][1], [QBE][2], and [GNU binutils][3] (for `as` and `ld`).
 Passing the game code through cproc and QBE results just over 2000
 lines of simple and readable `x86_64` assembly.
 
