@@ -5,8 +5,10 @@ typedef long i64;
 typedef unsigned long u64;
 typedef i32 e32;
 
-static void *memcpy(void *restrict dest, const void *restrict src, u64 count);
-static void *memset(void *dest, int val, u64 count);
+void *memcpy(void *restrict dest, const void *restrict src, u64 count);
+void *memset(void *dest, int val, u64 count);
+void *memmove(void *dest, const void *src, u64 n);
+i32 memcmp(const void *vl, const void *vr, u64 n);
 
 enum syscall {
     SYS_READ = 0,
@@ -323,21 +325,52 @@ static void draw_board(
     u32 scale
 );
 
-static void *memcpy(void *restrict dest, const void *restrict src, u64 count) {
+void *memcpy(void *restrict dest, const void *restrict src, u64 count) {
     char *d = dest;
     const char *s = src;
-    for (i64 i = 0; i < (i64)count; ++i) {
+    for (u64 i = 0; i < count; ++i) {
         d[i] = s[i];
     }
     return dest;
 }
 
-static void *memset(void *dest, int val, u64 count) {
+void *memset(void *dest, int val, u64 count) {
     char *d = dest;
-    for (i64 i = 0; i < (i64)count; ++i) {
+    for (u64 i = 0; i < count; ++i) {
         d[i] = (char)val;
     }
     return dest;
+}
+
+void *memmove(void *dest, const void *src, u64 n) {
+    char *d = dest;
+    const char *s = src;
+
+    if (d == s) {
+        return d;
+    } else if (d < s) {
+        for (; n; n--) {
+            *d++ = *s++;
+        }
+    } else {
+        while (n != 0) {
+            n -= 1;
+            d[n] = s[n];
+        }
+    }
+
+    return dest;
+}
+
+i32 memcmp(const void *vl, const void *vr, u64 n) {
+    const char *l = vl;
+    const char *r = vr;
+    while ((n > 0) && (*l == *r)) {
+        n -= 1;
+        l += 1;
+        r += 1;
+    }
+    return (n > 0) ? (*l - *r) : 0;
 }
 
 static e32 syscall_error(u64 rvalue) {
@@ -473,12 +506,12 @@ static i32 epoll_create1(void) {
 static void *alloc(struct arena *arena, u64 size) {
     i64 available = arena->end - arena->start;
     i64 padding = -(u64)arena->start & (16 - 1);
-    if (size > (u64)(available - padding)) {
+    if ((i64)size > (available - padding)) {
         return 0;
     }
     char *p = arena->start + padding;
-    arena->start += (u64)padding + size;
-    return memset(p, 0, (u64)size);
+    arena->start += padding + (i64)size;
+    return memset(p, 0, size);
 }
 
 static i64 nsec_since(struct timespec *end, struct timespec *start) {
@@ -505,12 +538,11 @@ static e32 evioctl(
     u32 size,
     char *data
 ) {
-    return ioctl(
-        fd,
-        (type + event_code) | ((i32)'E' << 8) | ((i32)size << 16) |
-            (direction << 30),
-        data
-    );
+    i32 num_bits = type + event_code;
+    i32 type_bits = (i32)('E' << 8);
+    i32 size_bits = (i32)(size << 16);
+    i32 dir_bits = (i32)((u32)direction << 30);
+    return ioctl(fd, num_bits | type_bits | size_bits | dir_bits, data);
 }
 
 static i32 is_keyboard(i32 fd) {
@@ -827,7 +859,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     buf->map = mem;
     buf->fb_id = fb_cmd.fb_id;
 
-    memset(buf->map, 0, buf->size);
+    memset(buf->map, 0, creq.size);
 
     return buf;
 }
@@ -914,10 +946,10 @@ static e32 cmain(i32 argc, char **argv) {
         return CMAIN_ERROR_KEYBOARD_OPEN;
     }
 
-    error = evioctl(keyboard_fd, EVIO_WRITE, EVIO_GRAB, 0, 4, (char *)1);
-    if (error != 0) {
-        return CMAIN_ERROR_KEYBOARD_ACQUIRE;
-    }
+    // error = evioctl(keyboard_fd, EVIO_WRITE, EVIO_GRAB, 0, 4, (char *)1);
+    // if (error != 0) {
+    //     return CMAIN_ERROR_KEYBOARD_ACQUIRE;
+    // }
 
     i32 card_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC, 0);
     if (card_fd < 0) {

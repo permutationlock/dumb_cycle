@@ -16,13 +16,15 @@ preprocessor is to allow the project to compile using only
 Passing the game code through cproc and QBE results just over 2000
 lines of simple and readable `x86_64` assembly.
 
-## Playing the game
+## Building and running
 
-Run the game by executing `./run.sh` as with the required
-permissions[^1]. You can simply run the executable by itself, but the `run.sh`
-script executes `clear` to restore terminal when the game exits.
+Run the game by executing `make run` (or `make run_cproc`) with the required
+permissions[^1]. You can also run `make` and `./dumb_cycle`, but `make run`
+also executes `clear` to automatically restore terminal when the game exits.
 
-Move with WASD and try to avoid the walls. Press ESC to exit.
+## Playing
+
+Steer with WASD and avoid the walls. Press ESC to exit.
 
 ## References
 
