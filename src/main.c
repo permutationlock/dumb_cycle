@@ -12,15 +12,11 @@ typedef i32 b32;
 static void *memcpy(void *restrict dest, const void *restrict src, u64 count);
 static void *memset(void *dest, int val, u64 count);
 
-extern void halt(void);
-
 enum syscall {
     SYS_READ = 0,
-    SYS_WRITE = 1,
     SYS_OPEN = 2,
     SYS_CLOSE = 3,
     SYS_MMAP = 9,
-    SYS_MUNMAP = 11,
     SYS_IOCTL = 16,
     SYS_EXIT = 60,
     SYS_GETDENTS = 78,
@@ -74,7 +70,6 @@ struct linux_dirent {
 };
 
 static i64 read(i32 fd, u8 *bytes, i64 bytes_len);
-static i64 write(i32 fd, u8 *bytes, i64 bytes_len);
 static i32 open(cstring fname, i32 flags, i32 mode);
 static e32 close(i32 fd);
 static void *mmap(
@@ -85,7 +80,6 @@ static void *mmap(
     i32 fd,
     i64 offset
 );
-static e32 munmap(void *start, i64 size);
 static e32 ioctl(i32 fd, i32 request, u8 *arg);
 static void exit(e32 error_code);
 static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_len);
@@ -104,7 +98,7 @@ struct arena {
     u8 *end;
 };
 
-static void *alloc(struct arena *arena, i64 size, i64 align);
+static void *alloc(struct arena *arena, i64 size);
 
 static i64 nsec_since(struct timespec *end, struct timespec *start);
 
@@ -364,20 +358,6 @@ static i64 read(i32 fd, u8 *bytes, i64 bytes_len) {
     return (i64)return_value;
 }
 
-static i64 write(i32 fd, u8 *bytes, i64 bytes_len) {
-    u64 return_value;
-    e32 error;
-    do {
-        return_value = syscall3(SYS_WRITE, (u64)fd, (u64)bytes, (u64)bytes_len);
-        error = syscall_error(return_value);
-    } while (error == EINTR);
-
-    if (error != 0) {
-        return -error;
-    }
-    return (i64)return_value;
-}
-
 static i32 open(cstring fname, i32 mode, i32 flags) {
     u64 return_value;
     e32 error;
@@ -417,11 +397,6 @@ static void *mmap(
         return 0;
     }
     return (void *)return_value;
-}
-
-static e32 munmap(void *start, i64 size) {
-    u64 return_value = syscall2(SYS_MUNMAP, (u64)start, (u64)size);
-    return syscall_error(return_value);
 }
 
 static e32 ioctl(i32 fd, i32 request, u8 *arg) {
@@ -485,9 +460,9 @@ static i32 epoll_create1(void) {
     return (i32)return_value;
 }
 
-static void *alloc(struct arena *arena, i64 size, i64 align) {
+static void *alloc(struct arena *arena, i64 size) {
     i64 available = arena->end - arena->start;
-    i64 padding = -(u64)arena->start & (align - 1);
+    i64 padding = -(u64)arena->start & (16 - 1);
     if (size > (available - padding)) {
         return 0;
     }
@@ -563,7 +538,7 @@ static i32 open_keyboard(struct arena temp_arena) {
         return -1;
     }
 
-    struct linux_dirent *dents = alloc(&temp_arena, 1024, 16);
+    struct linux_dirent *dents = alloc(&temp_arena, 1024);
     u8 path_buffer[(sizeof(input_dir) - 1) + 1023];
     memcpy(path_buffer, input_dir, sizeof(input_dir));
     path_buffer[sizeof(input_dir) - 1] = '/';
@@ -608,7 +583,7 @@ static struct drm_mode_resources *drm_mode_get_resources(
 
     do {
         setup_arena = *perm_arena;
-        res = alloc(&setup_arena, sizeof(*res), 16);
+        res = alloc(&setup_arena, sizeof(*res));
         if (res == 0) {
             return 0;
         }
@@ -621,21 +596,21 @@ static struct drm_mode_resources *drm_mode_get_resources(
 
         if (res->fbs_len > 0) {
             res->fbs =
-                alloc(&setup_arena, res->fbs_len * sizeof(*res->fbs), 16);
+                alloc(&setup_arena, res->fbs_len * sizeof(*res->fbs));
             if (res->fbs == 0) {
                 return 0;
             }
         }
         if (res->crtcs_len > 0) {
             res->crtcs =
-                alloc(&setup_arena, res->crtcs_len * sizeof(*res->crtcs), 16);
+                alloc(&setup_arena, res->crtcs_len * sizeof(*res->crtcs));
             if (res->crtcs == 0) {
                 return 0;
             }
         }
         if (res->connectors_len > 0) {
             res->connectors = alloc(
-                &setup_arena, res->connectors_len * sizeof(*res->connectors), 16
+                &setup_arena, res->connectors_len * sizeof(*res->connectors)
             );
             if (res->connectors == 0) {
                 return 0;
@@ -643,7 +618,7 @@ static struct drm_mode_resources *drm_mode_get_resources(
         }
         if (res->encoders_len > 0) {
             res->encoders = alloc(
-                &setup_arena, res->encoders_len * sizeof(*res->encoders), 16
+                &setup_arena, res->encoders_len * sizeof(*res->encoders)
             );
             if (res->encoders == 0) {
                 return 0;
@@ -675,7 +650,7 @@ static struct drm_mode_connector *drm_mode_get_connector(
 
     do {
         setup_arena = *perm_arena;
-        conn = alloc(&setup_arena, sizeof(*conn), 16);
+        conn = alloc(&setup_arena, sizeof(*conn));
         if (conn == 0) {
             return 0;
         }
@@ -689,9 +664,9 @@ static struct drm_mode_connector *drm_mode_get_connector(
 
         if (conn->props_len > 0) {
             conn->props =
-                alloc(&setup_arena, conn->props_len * sizeof(*conn->props), 16);
+                alloc(&setup_arena, conn->props_len * sizeof(*conn->props));
             conn->prop_values = alloc(
-                &setup_arena, conn->props_len * sizeof(*conn->prop_values), 16
+                &setup_arena, conn->props_len * sizeof(*conn->prop_values)
             );
             if (conn->props == 0 || conn->prop_values == 0) {
                 return 0;
@@ -699,14 +674,14 @@ static struct drm_mode_connector *drm_mode_get_connector(
         }
         if (conn->modes_len > 0) {
             conn->modes =
-                alloc(&setup_arena, conn->modes_len * sizeof(*conn->modes), 16);
+                alloc(&setup_arena, conn->modes_len * sizeof(*conn->modes));
             if (conn->modes == 0) {
                 return 0;
             }
         }
         if (conn->encoders_len > 0) {
             conn->encoders = alloc(
-                &setup_arena, conn->encoders_len * sizeof(*conn->encoders), 16
+                &setup_arena, conn->encoders_len * sizeof(*conn->encoders)
             );
             if (conn->encoders == 0) {
                 return 0;
@@ -733,7 +708,7 @@ static struct drm_mode_encoder *drm_mode_get_encoder(
     struct arena setup_arena = *perm_arena;
     struct drm_mode_encoder *enc = 0;
 
-    enc = alloc(&setup_arena, sizeof(*enc), 16);
+    enc = alloc(&setup_arena, sizeof(*enc));
     if (enc == 0) {
         return 0;
     }
@@ -756,7 +731,7 @@ static struct drm_mode_crtc *drm_mode_get_crtc(
     struct arena setup_arena = *perm_arena;
     struct drm_mode_crtc *crtc = 0;
 
-    crtc = alloc(&setup_arena, sizeof(*crtc), 16);
+    crtc = alloc(&setup_arena, sizeof(*crtc));
     if (crtc == 0) {
         return 0;
     }
@@ -828,7 +803,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     }
 
     struct drm_mode_dumb_buffer *buf;
-    buf = alloc(perm_arena, sizeof(*buf), 16);
+    buf = alloc(perm_arena, sizeof(*buf));
     buf->width = width;
     buf->height = height;
     buf->stride = creq.pitch / sizeof(u32);
@@ -849,11 +824,10 @@ static void update_game_state(struct game_state *state) {
 
     if (state->board[state->y * 90 + state->x] != 0 || state->x == 89 ||
         state->x == 0 || state->y == 89 || state->y == 0) {
-        state->board[state->y * 90 + state->x] = 4;
         state->dead = 1;
     }
 
-    state->board[state->y * 90 + state->x] = 3;
+    state->board[state->y * 90 + state->x] = 1;
 }
 
 static void clear_game_state(struct game_state *state) {
@@ -890,6 +864,25 @@ static void draw_board(
     }
 }
 
+enum cmain_error {
+    CERROR_NONE = 0,
+    CERROR_ARENA_ALLOC,
+    CERROR_KEYBOARD_OPEN,
+    CERROR_KEYBOARD_ACQUIRE,
+    CERROR_KEYBOARD_READ,
+    CERROR_VCARD_OPEN,
+    CERROR_DRM_GET_RESOURCES,
+    CERROR_DRM_FIND_CONNECTOR,
+    CERROR_DRM_GET_ENCODER,
+    CERROR_DRM_CREATE_BUFFERS,
+    CERROR_DRM_GET_CRTC,
+    CERROR_DRM_SET_CRTC,
+    CERROR_EPOLL_CREATE,
+    CERROR_EPOLL_CTL,
+    CERROR_EPOLL_WAIT,
+    CERROR_CLOCK_GETTIME,
+};
+
 static i32 cmain(i32 argc, cstring *argv) {
     e32 error;
     i64 arena_size = 2000 * 4096;
@@ -897,13 +890,13 @@ static i32 cmain(i32 argc, cstring *argv) {
         0, arena_size, PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANON, -1, 0
     );
     if (mem == 0) {
-        return 1;
+        return CERROR_ARENA_ALLOC;
     }
     struct arena perm_arena = { .start = mem, .end = mem + arena_size };
 
     i32 keyboard_fd = open_keyboard(perm_arena);
     if (keyboard_fd < 0) {
-        return 2;
+        return CERROR_KEYBOARD_OPEN;
     }
 
     error = ioctl(
@@ -912,18 +905,18 @@ static i32 cmain(i32 argc, cstring *argv) {
         (u8 *)1
     );
     if (error != 0) {
-        return 3;
+        return CERROR_KEYBOARD_ACQUIRE;
     }
 
     i32 card_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC, 0);
     if (card_fd < 0) {
-        return 4;
+        return CERROR_VCARD_OPEN;
     }
 
     struct drm_mode_resources *res =
         drm_mode_get_resources(&perm_arena, card_fd);
     if (res == 0) {
-        return 5;
+        return CERROR_DRM_GET_RESOURCES;
     }
 
     i32 conn_index;
@@ -940,13 +933,13 @@ static i32 cmain(i32 argc, cstring *argv) {
         }
     }
     if (conn_index == res->connectors_len || conn == 0) {
-        return 6;
+        return CERROR_DRM_FIND_CONNECTOR;
     }
 
     struct drm_mode_encoder *enc =
         drm_mode_get_encoder(&perm_arena, card_fd, conn->encoder_id);
     if (enc == 0) {
-        return 7;
+        return CERROR_DRM_GET_ENCODER;
     }
 
     i32 buf_index = 0;
@@ -958,13 +951,13 @@ static i32 cmain(i32 argc, cstring *argv) {
         &perm_arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
     );
     if (bufs[0] == 0 || bufs[1] == 0) {
-        return 8;
+        return CERROR_DRM_CREATE_BUFFERS;
     }
 
     struct drm_mode_crtc *crtc =
         drm_mode_get_crtc(&perm_arena, card_fd, enc->crtc_id);
     if (crtc == 0) {
-        return 9;
+        return CERROR_DRM_GET_CRTC;
     }
 
     crtc->mode = conn->modes[0];
@@ -980,14 +973,6 @@ static i32 cmain(i32 argc, cstring *argv) {
     i32 board_x = (width / 2) - (board_size / 2);
     i32 board_y = (height / 2) - (board_size / 2);
 
-    u8 msg[5];
-    msg[0] = '0' + (u8)((width / 1000) % 10);
-    msg[1] = '0' + (u8)((width / 100) % 10);
-    msg[2] = '0' + (u8)((width / 10) % 10);
-    msg[3] = '0' + (u8)(width % 10);
-    msg[4] = '\n';
-    write(1, msg, sizeof(msg));
-
     for (i32 bi = 0; bi < 2; ++bi) {
         for (i32 i = 0; i < (i32)bufs[bi]->size; ++i) {
             bufs[bi]->map[i] = COLOR_BLACK;
@@ -998,13 +983,13 @@ static i32 cmain(i32 argc, cstring *argv) {
         card_fd, crtc, &conn->connector_id, 1, bufs[0]->fb_id
     );
     if (error != 0) {
-        return 12;
+        return CERROR_DRM_SET_CRTC;
     }
     buf_index ^= 1;
 
     i32 epoll_fd = epoll_create1();
     if (epoll_fd < 0) {
-        return 10;
+        return CERROR_EPOLL_CREATE;
     }
 
     struct epoll_event epoll_event = {
@@ -1013,7 +998,7 @@ static i32 cmain(i32 argc, cstring *argv) {
     };
     error = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, keyboard_fd, &epoll_event);
     if (error != 0) {
-        return 11;
+        return CERROR_EPOLL_CTL;
     }
 
     struct epoll_event ep_events[32];
@@ -1022,7 +1007,7 @@ static i32 cmain(i32 argc, cstring *argv) {
 
     error = clock_gettime(CLOCK_MONOTONIC, &now);
     if (error != 0) {
-        return 13;
+        return CERROR_CLOCK_GETTIME;
     }
     last_update = now;
 
@@ -1031,12 +1016,12 @@ static i32 cmain(i32 argc, cstring *argv) {
             epoll_fd, ep_events, sizeof(ep_events) / sizeof(*ep_events), 0
         );
         if (ep_count < 0) {
-            return 15;
+            return CERROR_EPOLL_WAIT;
         }
 
         error = clock_gettime(CLOCK_MONOTONIC, &now);
         if (error != 0) {
-            return 16;
+            return CERROR_CLOCK_GETTIME;
         }
 
         i64 ns_elapsed = nsec_since(&now, &last_update);
@@ -1045,7 +1030,7 @@ static i32 cmain(i32 argc, cstring *argv) {
             if (ep_events[ep_index].data.fd == keyboard_fd) {
                 i64 len = read(keyboard_fd, (u8 *)kb_events, sizeof(kb_events));
                 if (len < 0) {
-                    return 16;
+                    return CERROR_KEYBOARD_READ;
                 }
                 for (i32 i = 0; i < (i32)(len / sizeof(*kb_events)); ++i) {
                     if (kb_events[i].type == 1 && kb_events[i].value == 1) {
@@ -1094,7 +1079,7 @@ static i32 cmain(i32 argc, cstring *argv) {
                 card_fd, crtc, &conn->connector_id, 1, bufs[buf_index]->fb_id
             );
             if (error != 0) {
-                return 10;
+                return CERROR_DRM_SET_CRTC;
             }
 
             buf_index ^= 1;
@@ -1102,19 +1087,10 @@ static i32 cmain(i32 argc, cstring *argv) {
             if (game_state.dead != 0) {
                 clear_game_state(&game_state);
             }
-
-            // u8 msg[6];
-            // msg[0] = 'u';
-            // msg[1] = '0' + (u8)((ns_elapsed / (1000 * 1000 * 1000)) % 10);
-            // msg[2] = '0' + (u8)((ns_elapsed / (100 * 1000 * 1000)) % 10);
-            // msg[3] = '0' + (u8)((ns_elapsed / (10 * 1000 * 1000)) % 10);
-            // msg[4] = '0' + (u8)((ns_elapsed / (1000 * 1000)) % 10);
-            // msg[5] = '\n';
-            // write(1, msg, sizeof(msg));
         }
     }
 
-    return 0;
+    return CERROR_NONE;
 }
 
 struct arg_data {
