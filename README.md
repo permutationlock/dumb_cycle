@@ -7,7 +7,7 @@ directives (no `#ifdef`,  `#define`, `#include`, etc).
 Images are drawn to the screen using the "dumb buffer" API provided by the
 Direct Rendering Manager (DRM) subsystem of Linux. Keyboard input is read
 directly from a keyboard device file. DumbCycle should run on any `x86_64`
-Linux system with DRM support, a video card, and a keyboard.
+Linux system with DRM support, a video card, and a keyboard[^1]. 
 
 DumbCycle can be compiled with any C compiler that supports C99 and ATT
 syntax `x86_64` assembly. The primary motivation for eschewing the C
@@ -22,6 +22,11 @@ lines of simple and readable `x86_64` assembly.
  - [libdrm][5]
  - [linux kernel][6]
  - [drm\_howto][7]
+
+ [^1]: The game must have permissions to open the video device `/dev/drm/card0`
+    and the input devices in `/dev/input/`.
+    No other programs should be drawing to `/dev/drm/card0`, i.e.
+    you need to close your X11 and/or Wayland server.
 
 [1]: https://sr.ht/~mcf/cproc/
 [2]: https://c9x.me/compile/
