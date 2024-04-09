@@ -1,13 +1,9 @@
-typedef unsigned char u8;
-typedef short i16;
 typedef unsigned short u16;
 typedef int i32;
 typedef unsigned int u32;
 typedef long i64;
 typedef unsigned long u64;
-
 typedef i32 e32;
-typedef i32 b32;
 
 static void *memcpy(void *restrict dest, const void *restrict src, u64 count);
 static void *memset(void *dest, int val, u64 count);
@@ -42,8 +38,6 @@ enum prot { PROT_READ = 1, PROT_WRITE = 2 };
 enum map { MAP_SHARED = 0x01, MAP_PRIVATE = 0x02, MAP_ANON = 0x20 };
 enum clock { CLOCK_MONOTONIC = 1 };
 
-typedef char *cstring;
-
 struct timespec {
     i64 sec;
     i64 nsec;
@@ -69,8 +63,8 @@ struct linux_dirent {
     char name[];
 };
 
-static i64 read(i32 fd, u8 *bytes, i64 bytes_len);
-static i32 open(cstring fname, i32 flags, i32 mode);
+static i64 read(i32 fd, char *bytes, i64 bytes_len);
+static i32 open(char *fname, i32 flags, i32 mode);
 static e32 close(i32 fd);
 static void *mmap(
     void *hint,
@@ -80,7 +74,7 @@ static void *mmap(
     i32 fd,
     i64 offset
 );
-static e32 ioctl(i32 fd, i32 request, u8 *arg);
+static e32 ioctl(i32 fd, i32 request, char *arg);
 static void exit(e32 error_code);
 static i64 getdents(i32 fd, struct linux_dirent *dents, i64 dents_len);
 static e32 clock_gettime(i32 clock_id, struct timespec *timespec);
@@ -94,8 +88,8 @@ static e32 epoll_ctl(i32 epfd, i32 op, i32 fd, struct epoll_event *event);
 static i32 epoll_create1(void);
 
 struct arena {
-    u8 *start;
-    u8 *end;
+    char *start;
+    char *end;
 };
 
 static void *alloc(struct arena *arena, i64 size);
@@ -121,9 +115,16 @@ struct input_event {
     i32 value;
 };
 
-static i32 test_bit(u8 *bytes, i32 len, i32 bit_num);
-static e32 evioctl(i32 fd, u8 direction, u8 type, u8 event_code, i16 size, u8 *data);
-static b32 is_keyboard(i32 fd);
+static i32 test_bit(char *bytes, i32 len, i32 bit_num);
+static e32 evioctl(
+    i32 fd,
+    u32 direction,
+    u32 type,
+    u32 event_code,
+    u32 size,
+    char *data
+);
+static i32 is_keyboard(i32 fd);
 static i32 open_keyboard(struct arena temp_arena);
 
 struct drm_mode_resources {
@@ -309,7 +310,7 @@ struct game_state {
     i32 vx;
     i32 vy;
     i32 dead;
-    u8 board[90 * 90];
+    char board[90 * 90];
 };
 
 static void update_game_state(struct game_state *state);
@@ -323,8 +324,8 @@ static void draw_board(
 );
 
 static void *memcpy(void *restrict dest, const void *restrict src, u64 count) {
-    u8 *d = dest;
-    const u8 *s = src;
+    char *d = dest;
+    const char *s = src;
     for (i64 i = 0; i < (i64)count; ++i) {
         d[i] = s[i];
     }
@@ -332,9 +333,9 @@ static void *memcpy(void *restrict dest, const void *restrict src, u64 count) {
 }
 
 static void *memset(void *dest, int val, u64 count) {
-    u8 *d = dest;
+    char *d = dest;
     for (i64 i = 0; i < (i64)count; ++i) {
-        d[i] = (u8)val;
+        d[i] = (char)val;
     }
     return dest;
 }
@@ -346,7 +347,7 @@ static e32 syscall_error(u64 rvalue) {
     return 0;
 }
 
-static i64 read(i32 fd, u8 *bytes, i64 bytes_len) {
+static i64 read(i32 fd, char *bytes, i64 bytes_len) {
     u64 return_value;
     e32 error;
     do {
@@ -360,7 +361,7 @@ static i64 read(i32 fd, u8 *bytes, i64 bytes_len) {
     return (i64)return_value;
 }
 
-static i32 open(cstring fname, i32 mode, i32 flags) {
+static i32 open(char *fname, i32 mode, i32 flags) {
     u64 return_value;
     e32 error;
     do {
@@ -401,7 +402,7 @@ static void *mmap(
     return (void *)return_value;
 }
 
-static e32 ioctl(i32 fd, i32 request, u8 *arg) {
+static e32 ioctl(i32 fd, i32 request, char *arg) {
     u64 return_value;
     e32 error;
     do {
@@ -468,7 +469,7 @@ static void *alloc(struct arena *arena, i64 size) {
     if (size > (available - padding)) {
         return 0;
     }
-    u8 *p = arena->start + padding;
+    char *p = arena->start + padding;
     arena->start += padding + size;
     return memset(p, 0, size);
 }
@@ -479,7 +480,7 @@ static i64 nsec_since(struct timespec *end, struct timespec *start) {
     return elapsed - start->nsec;
 }
 
-static i32 test_bit(u8 *bytes, i32 len, i32 bit_num) {
+static i32 test_bit(char *bytes, i32 len, i32 bit_num) {
     i32 byte_index = bit_num / 8;
     i32 bit_index = bit_num % 8;
     if (byte_index >= len) {
@@ -489,7 +490,14 @@ static i32 test_bit(u8 *bytes, i32 len, i32 bit_num) {
     return (bytes[byte_index] & (1 << bit_index)) != 0;
 }
 
-static e32 evioctl(i32 fd, u8 direction, u8 type, u8 event_code, i16 size, u8 *data) {
+static e32 evioctl(
+    i32 fd,
+    u32 direction,
+    u32 type,
+    u32 event_code,
+    u32 size,
+    char *data
+) {
     return ioctl(
         fd,
         ((u32)type + event_code) | ((u32)'E' << 8) | ((u32)size << 16) |
@@ -499,7 +507,7 @@ static e32 evioctl(i32 fd, u8 direction, u8 type, u8 event_code, i16 size, u8 *d
 }
 
 static i32 is_keyboard(i32 fd) {
-    u8 evbits[(EV_MAX + 1) / 8];
+    char evbits[(EV_MAX + 1) / 8];
     e32 error = evioctl(fd, EVIO_READ, EVIO_GBIT, 0, sizeof(evbits), evbits);
     if (error != 0) {
         return 0;
@@ -508,7 +516,7 @@ static i32 is_keyboard(i32 fd) {
         return 0;
     }
 
-    u8 keybits[(KEY_MAX + 1) / 8];
+    char keybits[(KEY_MAX + 1) / 8];
     error = evioctl(fd, EVIO_READ, EVIO_GBIT, EV_KEY, sizeof(keybits), keybits);
     if (error != 0) {
         return 0;
@@ -534,17 +542,17 @@ static i32 is_keyboard(i32 fd) {
 }
 
 static i32 open_keyboard(struct arena temp_arena) {
-    u8 input_dir[] = "/dev/input";
-    i32 input_dir_fd = open((cstring)input_dir, O_RDONLY | O_CLOEXEC, 0);
+    char input_dir[] = "/dev/input";
+    i32 input_dir_fd = open((char *)input_dir, O_RDONLY | O_CLOEXEC, 0);
     if (input_dir_fd < 0) {
         return -1;
     }
 
     struct linux_dirent *dents = alloc(&temp_arena, 1024);
-    u8 path_buffer[(sizeof(input_dir) - 1) + 1023];
+    char path_buffer[(sizeof(input_dir) - 1) + 1023];
     memcpy(path_buffer, input_dir, sizeof(input_dir));
     path_buffer[sizeof(input_dir) - 1] = '/';
-    u8 *name_buffer = &path_buffer[sizeof(input_dir)];
+    char *name_buffer = &path_buffer[sizeof(input_dir)];
 
     i64 dents_pos = 0;
     i64 dents_len = 0;
@@ -556,10 +564,10 @@ static i32 open_keyboard(struct arena temp_arena) {
                 break;
             }
         }
-        struct linux_dirent *dent = (void *)(((u8 *)dents) + dents_pos);
+        struct linux_dirent *dent = (void *)(((char *)dents) + dents_pos);
         memcpy(name_buffer, dent->name, dent->reclen - 18);
         path_buffer[sizeof(path_buffer) - 1] = 0;
-        keyboard_fd = open((cstring)path_buffer, O_RDONLY, 0);
+        keyboard_fd = open((char *)path_buffer, O_RDONLY, 0);
         if (keyboard_fd >= 0) {
             if (!is_keyboard(keyboard_fd)) {
                 close(keyboard_fd);
@@ -589,7 +597,7 @@ static struct drm_mode_resources *drm_mode_get_resources(
         if (res == 0) {
             return 0;
         }
-        error = ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, (u8 *)res);
+        error = ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, (char *)res);
         if (error != 0) {
             return 0;
         }
@@ -597,8 +605,7 @@ static struct drm_mode_resources *drm_mode_get_resources(
         prev_res = *res;
 
         if (res->fbs_len > 0) {
-            res->fbs =
-                alloc(&setup_arena, res->fbs_len * sizeof(*res->fbs));
+            res->fbs = alloc(&setup_arena, res->fbs_len * sizeof(*res->fbs));
             if (res->fbs == 0) {
                 return 0;
             }
@@ -619,15 +626,14 @@ static struct drm_mode_resources *drm_mode_get_resources(
             }
         }
         if (res->encoders_len > 0) {
-            res->encoders = alloc(
-                &setup_arena, res->encoders_len * sizeof(*res->encoders)
-            );
+            res->encoders =
+                alloc(&setup_arena, res->encoders_len * sizeof(*res->encoders));
             if (res->encoders == 0) {
                 return 0;
             }
         }
 
-        error = ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, (u8 *)res);
+        error = ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, (char *)res);
         if (error != 0) {
             return 0;
         }
@@ -657,7 +663,7 @@ static struct drm_mode_connector *drm_mode_get_connector(
             return 0;
         }
         conn->connector_id = connector_id;
-        error = ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, (u8 *)conn);
+        error = ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, (char *)conn);
         if (error != 0) {
             return 0;
         }
@@ -690,7 +696,7 @@ static struct drm_mode_connector *drm_mode_get_connector(
             }
         }
 
-        error = ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, (u8 *)conn);
+        error = ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, (char *)conn);
         if (error != 0) {
             return 0;
         }
@@ -716,7 +722,7 @@ static struct drm_mode_encoder *drm_mode_get_encoder(
     }
 
     enc->encoder_id = encoder_id;
-    e32 error = ioctl(fd, DRM_IOCTL_MODE_GETENCODER, (u8 *)enc);
+    e32 error = ioctl(fd, DRM_IOCTL_MODE_GETENCODER, (char *)enc);
     if (error != 0) {
         return 0;
     }
@@ -739,7 +745,7 @@ static struct drm_mode_crtc *drm_mode_get_crtc(
     }
 
     crtc->crtc_id = crtc_id;
-    e32 error = ioctl(fd, DRM_IOCTL_MODE_GETCRTC, (u8 *)crtc);
+    e32 error = ioctl(fd, DRM_IOCTL_MODE_GETCRTC, (char *)crtc);
     if (error != 0) {
         return 0;
     }
@@ -758,7 +764,7 @@ static e32 drm_mode_set_crtc(
     crtc->set_connectors = connectors;
     crtc->connectors_len = connectors_len;
     crtc->fb_id = fb_id;
-    return ioctl(fd, DRM_IOCTL_MODE_SETCRTC, (u8 *)crtc);
+    return ioctl(fd, DRM_IOCTL_MODE_SETCRTC, (char *)crtc);
 }
 
 static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
@@ -774,7 +780,7 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
     };
     e32 error;
 
-    error = ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, (u8 *)&creq);
+    error = ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, (char *)&creq);
     if (error != 0) {
         return 0;
     }
@@ -787,13 +793,13 @@ static struct drm_mode_dumb_buffer *drm_mode_create_dumb_buffer(
         .depth = 24,
         .handle = creq.handle,
     };
-    error = ioctl(fd, DRM_IOCTL_MODE_ADDFB, (u8 *)&fb_cmd);
+    error = ioctl(fd, DRM_IOCTL_MODE_ADDFB, (char *)&fb_cmd);
     if (error != 0) {
         return 0;
     }
 
     struct drm_mode_map_dumb mreq = { .handle = creq.handle };
-    error = ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, (u8 *)&mreq);
+    error = ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, (char *)&mreq);
     if (error != 0) {
         return 0;
     }
@@ -867,54 +873,54 @@ static void draw_board(
 }
 
 enum cmain_error {
-    CERROR_NONE = 0,
-    CERROR_ARENA_ALLOC,
-    CERROR_KEYBOARD_OPEN,
-    CERROR_KEYBOARD_ACQUIRE,
-    CERROR_KEYBOARD_READ,
-    CERROR_VCARD_OPEN,
-    CERROR_DRM_GET_RESOURCES,
-    CERROR_DRM_FIND_CONNECTOR,
-    CERROR_DRM_GET_ENCODER,
-    CERROR_DRM_CREATE_BUFFERS,
-    CERROR_DRM_GET_CRTC,
-    CERROR_DRM_SET_CRTC,
-    CERROR_EPOLL_CREATE,
-    CERROR_EPOLL_CTL,
-    CERROR_EPOLL_WAIT,
-    CERROR_CLOCK_GETTIME,
+    CMAIN_ERROR_NONE = 0,
+    CMAIN_ERROR_ARENA_ALLOC,
+    CMAIN_ERROR_KEYBOARD_OPEN,
+    CMAIN_ERROR_KEYBOARD_ACQUIRE,
+    CMAIN_ERROR_KEYBOARD_READ,
+    CMAIN_ERROR_VCARD_OPEN,
+    CMAIN_ERROR_DRM_GET_RESOURCES,
+    CMAIN_ERROR_DRM_FIND_CONNECTOR,
+    CMAIN_ERROR_DRM_GET_ENCODER,
+    CMAIN_ERROR_DRM_CREATE_BUFFERS,
+    CMAIN_ERROR_DRM_GET_CRTC,
+    CMAIN_ERROR_DRM_SET_CRTC,
+    CMAIN_ERROR_EPOLL_CREATE,
+    CMAIN_ERROR_EPOLL_CTL,
+    CMAIN_ERROR_EPOLL_WAIT,
+    CMAIN_ERROR_CLOCK_GETTIME,
 };
 
-static e32 cmain(i32 argc, cstring *argv) {
+static e32 cmain(i32 argc, char **argv) {
     e32 error;
     i64 arena_size = 2000 * 4096;
-    u8 *mem = mmap(
+    char *mem = mmap(
         0, arena_size, PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANON, -1, 0
     );
     if (mem == 0) {
-        return CERROR_ARENA_ALLOC;
+        return CMAIN_ERROR_ARENA_ALLOC;
     }
     struct arena perm_arena = { .start = mem, .end = mem + arena_size };
 
     i32 keyboard_fd = open_keyboard(perm_arena);
     if (keyboard_fd < 0) {
-        return CERROR_KEYBOARD_OPEN;
+        return CMAIN_ERROR_KEYBOARD_OPEN;
     }
 
-    error = evioctl(keyboard_fd, EVIO_WRITE, EVIO_GRAB, 0, 4, (u8 *)1);
+    error = evioctl(keyboard_fd, EVIO_WRITE, EVIO_GRAB, 0, 4, (char *)1);
     if (error != 0) {
-        return CERROR_KEYBOARD_ACQUIRE;
+        return CMAIN_ERROR_KEYBOARD_ACQUIRE;
     }
 
     i32 card_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC, 0);
     if (card_fd < 0) {
-        return CERROR_VCARD_OPEN;
+        return CMAIN_ERROR_VCARD_OPEN;
     }
 
     struct drm_mode_resources *res =
         drm_mode_get_resources(&perm_arena, card_fd);
     if (res == 0) {
-        return CERROR_DRM_GET_RESOURCES;
+        return CMAIN_ERROR_DRM_GET_RESOURCES;
     }
 
     i32 conn_index;
@@ -931,13 +937,13 @@ static e32 cmain(i32 argc, cstring *argv) {
         }
     }
     if (conn_index == res->connectors_len || conn == 0) {
-        return CERROR_DRM_FIND_CONNECTOR;
+        return CMAIN_ERROR_DRM_FIND_CONNECTOR;
     }
 
     struct drm_mode_encoder *enc =
         drm_mode_get_encoder(&perm_arena, card_fd, conn->encoder_id);
     if (enc == 0) {
-        return CERROR_DRM_GET_ENCODER;
+        return CMAIN_ERROR_DRM_GET_ENCODER;
     }
 
     i32 buf_index = 0;
@@ -949,13 +955,13 @@ static e32 cmain(i32 argc, cstring *argv) {
         &perm_arena, card_fd, conn->modes[0].hdisplay, conn->modes[0].vdisplay
     );
     if (bufs[0] == 0 || bufs[1] == 0) {
-        return CERROR_DRM_CREATE_BUFFERS;
+        return CMAIN_ERROR_DRM_CREATE_BUFFERS;
     }
 
     struct drm_mode_crtc *crtc =
         drm_mode_get_crtc(&perm_arena, card_fd, enc->crtc_id);
     if (crtc == 0) {
-        return CERROR_DRM_GET_CRTC;
+        return CMAIN_ERROR_DRM_GET_CRTC;
     }
 
     crtc->mode = conn->modes[0];
@@ -981,13 +987,13 @@ static e32 cmain(i32 argc, cstring *argv) {
         card_fd, crtc, &conn->connector_id, 1, bufs[0]->fb_id
     );
     if (error != 0) {
-        return CERROR_DRM_SET_CRTC;
+        return CMAIN_ERROR_DRM_SET_CRTC;
     }
     buf_index ^= 1;
 
     i32 epoll_fd = epoll_create1();
     if (epoll_fd < 0) {
-        return CERROR_EPOLL_CREATE;
+        return CMAIN_ERROR_EPOLL_CREATE;
     }
 
     struct epoll_event epoll_event = {
@@ -996,7 +1002,7 @@ static e32 cmain(i32 argc, cstring *argv) {
     };
     error = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, keyboard_fd, &epoll_event);
     if (error != 0) {
-        return CERROR_EPOLL_CTL;
+        return CMAIN_ERROR_EPOLL_CTL;
     }
 
     struct epoll_event ep_events[32];
@@ -1005,7 +1011,7 @@ static e32 cmain(i32 argc, cstring *argv) {
 
     error = clock_gettime(CLOCK_MONOTONIC, &now);
     if (error != 0) {
-        return CERROR_CLOCK_GETTIME;
+        return CMAIN_ERROR_CLOCK_GETTIME;
     }
     last_update = now;
 
@@ -1014,21 +1020,22 @@ static e32 cmain(i32 argc, cstring *argv) {
             epoll_fd, ep_events, sizeof(ep_events) / sizeof(*ep_events), 0
         );
         if (ep_count < 0) {
-            return CERROR_EPOLL_WAIT;
+            return CMAIN_ERROR_EPOLL_WAIT;
         }
 
         error = clock_gettime(CLOCK_MONOTONIC, &now);
         if (error != 0) {
-            return CERROR_CLOCK_GETTIME;
+            return CMAIN_ERROR_CLOCK_GETTIME;
         }
 
         i64 ns_elapsed = nsec_since(&now, &last_update);
 
         for (i32 ep_index = 0; ep_index < ep_count; ++ep_index) {
             if (ep_events[ep_index].data.fd == keyboard_fd) {
-                i64 len = read(keyboard_fd, (u8 *)kb_events, sizeof(kb_events));
+                i64 len =
+                    read(keyboard_fd, (char *)kb_events, sizeof(kb_events));
                 if (len < 0) {
-                    return CERROR_KEYBOARD_READ;
+                    return CMAIN_ERROR_KEYBOARD_READ;
                 }
                 for (i32 i = 0; i < (i32)(len / sizeof(*kb_events)); ++i) {
                     if (kb_events[i].type == 1 && kb_events[i].value == 1) {
@@ -1077,7 +1084,7 @@ static e32 cmain(i32 argc, cstring *argv) {
                 card_fd, crtc, &conn->connector_id, 1, bufs[buf_index]->fb_id
             );
             if (error != 0) {
-                return CERROR_DRM_SET_CRTC;
+                return CMAIN_ERROR_DRM_SET_CRTC;
             }
 
             buf_index ^= 1;
@@ -1088,12 +1095,12 @@ static e32 cmain(i32 argc, cstring *argv) {
         }
     }
 
-    return CERROR_NONE;
+    return CMAIN_ERROR_NONE;
 }
 
 struct arg_data {
     i64 count;
-    cstring args[];
+    char *args[];
 };
 
 void _cstart(struct arg_data *arg_data) {
