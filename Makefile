@@ -1,7 +1,5 @@
 all: dumb_cycle
 
-debug: dumb_cycle_dbg
-
 dumb_cycle: src/main.o src/syscall.o src/runtime.o
 	ld -o dumb_cycle src/main.o src/syscall.o src/runtime.o
 
@@ -34,17 +32,4 @@ clean_main:
 	rm -f src/main.s
 	rm -f src/main.o
 
-dumb_cycle_dbg: src/main.c src/syscall.o src/runtime.o
-	zig cc --target=x86_64-linux-musl -g3 -std=c99 -nostdlib \
-	 -fstrict-aliasing \
-     -fsanitize=undefined -fsanitize-trap \
-	 -Wcast-align -Wstrict-prototypes -Wold-style-definition \
-	 -Werror -Wall -Wextra -Wconversion -Wdouble-promotion \
-     -Wno-unused-parameter -Wno-unused-function -Wno-sign-conversion \
-	-o dumb_cycle_dbg src/main.c src/syscall.o src/runtime.o
-
-clean_dumb_cycle_dbg:
-	rm -f dumb_cycle_dbg
-
-clean: clean_dumb_cycle clean_dumb_cycle_dbg \
-	clean_main clean_runtime clean_syscall
+clean: clean_dumb_cycle clean_main clean_runtime clean_syscall
