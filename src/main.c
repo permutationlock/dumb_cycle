@@ -102,6 +102,8 @@ static void *alloc(struct arena *arena, i64 size);
 
 static i64 nsec_since(struct timespec *end, struct timespec *start);
 
+enum evio_code { EVIO_GBIT = 0x20, EVIO_GRAB = 0x90 };
+enum evio_direction { EVIO_WRITE = 0x1, EVIO_READ = 0x2 };
 enum ev_code { EV_KEY = 0x01, EV_MAX = 0x1f };
 enum ev_keys {
     KEY_ESC = 1,
@@ -120,7 +122,7 @@ struct input_event {
 };
 
 static i32 test_bit(u8 *bytes, i32 len, i32 bit_num);
-static e32 evio_cg_getbits(i32 fd, u8 event_code, i16 size, u8 *data);
+static e32 evioctl(i32 fd, u8 direction, u8 type, u8 event_code, i16 size, u8 *data);
 static b32 is_keyboard(i32 fd);
 static i32 open_keyboard(struct arena temp_arena);
 
@@ -487,18 +489,18 @@ static i32 test_bit(u8 *bytes, i32 len, i32 bit_num) {
     return (bytes[byte_index] & (1 << bit_index)) != 0;
 }
 
-static e32 evio_cg_getbits(i32 fd, u8 event_code, i16 size, u8 *data) {
+static e32 evioctl(i32 fd, u8 direction, u8 type, u8 event_code, i16 size, u8 *data) {
     return ioctl(
         fd,
-        ((u32)event_code + 0x20) | ((u32)'E' << 8) | ((u32)size << 16) |
-            (2U << 30),
+        ((u32)type + event_code) | ((u32)'E' << 8) | ((u32)size << 16) |
+            ((u32)direction << 30),
         data
     );
 }
 
 static i32 is_keyboard(i32 fd) {
     u8 evbits[(EV_MAX + 1) / 8];
-    e32 error = evio_cg_getbits(fd, 0, sizeof(evbits), evbits);
+    e32 error = evioctl(fd, EVIO_READ, EVIO_GBIT, 0, sizeof(evbits), evbits);
     if (error != 0) {
         return 0;
     }
@@ -507,7 +509,7 @@ static i32 is_keyboard(i32 fd) {
     }
 
     u8 keybits[(KEY_MAX + 1) / 8];
-    error = evio_cg_getbits(fd, EV_KEY, sizeof(keybits), keybits);
+    error = evioctl(fd, EVIO_READ, EVIO_GBIT, EV_KEY, sizeof(keybits), keybits);
     if (error != 0) {
         return 0;
     }
@@ -883,7 +885,7 @@ enum cmain_error {
     CERROR_CLOCK_GETTIME,
 };
 
-static i32 cmain(i32 argc, cstring *argv) {
+static e32 cmain(i32 argc, cstring *argv) {
     e32 error;
     i64 arena_size = 2000 * 4096;
     u8 *mem = mmap(
@@ -899,11 +901,7 @@ static i32 cmain(i32 argc, cstring *argv) {
         return CERROR_KEYBOARD_OPEN;
     }
 
-    error = ioctl(
-        keyboard_fd,
-        ((u32)0x90) | ((u32)'E' << 8) | (4 << 16) | (1U << 30),
-        (u8 *)1
-    );
+    error = evioctl(keyboard_fd, EVIO_WRITE, EVIO_GRAB, 0, 4, (u8 *)1);
     if (error != 0) {
         return CERROR_KEYBOARD_ACQUIRE;
     }
@@ -1099,6 +1097,6 @@ struct arg_data {
 };
 
 void _cstart(struct arg_data *arg_data) {
-    i32 exit_code = cmain((i32)arg_data->count, arg_data->args);
+    e32 exit_code = cmain((i32)arg_data->count, arg_data->args);
     exit(exit_code);
 }
